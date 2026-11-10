@@ -102,6 +102,9 @@ function makeServer(){
   ok("B4 Aynı e-posta → uyarı, eklenmedi",/уже есть/.test(await A.pg.textContent('#toast'))&&Object.keys(server.S.people).length===3);
   const selfRole=A.pg.locator('#pplList tr').filter({hasText:'Hüseyin'}).locator('select');await selfRole.selectOption('user');await A.pg.waitForTimeout(300);
   ok("B5 Son yönetici kendini düşüremez",/последний администратор/.test(await A.pg.textContent('#toast'))&&server.S.people["p-huseyin"].role==="admin");
+  A.pg.once('dialog',d=>d.accept('bauyrzhan@asys-machinery.com'));await A.pg.locator('#pplList a').filter({hasText:'bauyrzhan@test.kz'}).click();await A.pg.waitForTimeout(400);
+  ok("B5b E-posta tablodan düzenlendi",Object.values(server.S.people).some(x=>x.email==='bauyrzhan@asys-machinery.com')&&!Object.values(server.S.people).some(x=>x.email==='bauyrzhan@test.kz'));
+  A.pg.once('dialog',d=>d.accept('bauyrzhan@test.kz'));await A.pg.locator('#pplList a').filter({hasText:'bauyrzhan@asys-machinery.com'}).click();await A.pg.waitForTimeout(400);
   ok("B6 Admin oturumu hatasız",A.errs.length===0,A.errs.join("|"));
 
   /* C. kullanıcı: günlük kayıt → sunucu merge + geçmiş */
