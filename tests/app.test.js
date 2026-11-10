@@ -96,10 +96,13 @@ const {makeServer}=require('./mock_server');
   ok("C2 Kullanıcı: rozet Пользователь; Ayarlar'da yalnız Hesabım (kişiler/proje/bölge gizli)",/Пользователь/.test(await U.pg.textContent('#whoami'))&&await vis(U.pg,'#accCard')&&!(await vis(U.pg,'#pplForm'))&&!(await vis(U.pg,'#projInp'))&&/Бауыржан/.test(await U.pg.textContent('#accInfo')));
   await U.pg.click('text=Журнал дня');await U.pg.waitForTimeout(300);
   const row=U.pg.locator('#entryTbl tr[data-id="dmp-03"]');await row.locator('[data-f=status]').selectOption('broken');await row.locator('[data-f=note]').fill('гидравлика');
+  await row.locator('[data-f=loc]').fill('Блок 2, 3 этаж');await row.locator('[data-f=loc]').dispatchEvent('change');
+  ok("C2b Bölge alanı serbest metin kabul ediyor + öneri listesi var",(await U.pg.locator('#zonesDL option').count())>0&&(await row.locator('[data-f=loc]').getAttribute('list'))==='zonesDL');
   await U.pg.click('#saveDay');await U.pg.waitForTimeout(300);if(await vis(U.pg,'#modal'))await U.pg.click('#modalYes');await U.pg.waitForTimeout(600);
   const d10=server.S.days[TODAY];
   ok("C3 10.11 kaydı oluştu (ilk kayıt, 48 satır, saved_by kullanıcı)",!!d10&&Object.keys(d10.rec).length===48&&d10.history.length===1&&d10.history[0].first===true&&d10.saved_by!=="p-huseyin");
-  ok("C4 Д-03 broken + not",d10.rec["dmp-03"].status==="broken"&&d10.rec["dmp-03"].note==="гидравлика");
+  ok("C4 Д-03 broken + not + serbest bölge",d10.rec["dmp-03"].status==="broken"&&d10.rec["dmp-03"].note==="гидравлика"&&d10.rec["dmp-03"].loc==="Блок 2, 3 этаж");
+  await U.pg.evaluate(()=>renderEntry());ok("C4b Yazılan bölge sonraki önerilerde",(await U.pg.locator('#zonesDL option[value="Блок 2, 3 этаж"]').count())===1);
   ok("C5 Toast: Сохранено · N работает",/Сохранено · \d+/.test(await U.pg.textContent('#toast')),await U.pg.textContent('#toast'));
   // admin aynı anda Д-01'i değiştiriyor (ayrı istemci) — kullanıcının eski kopyası ezmesin
   await A.pg.evaluate(()=>loadAll());await A.pg.waitForTimeout(300);await A.pg.click('text=Журнал дня');await A.pg.waitForTimeout(300);
