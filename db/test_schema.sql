@@ -102,6 +102,14 @@ select case when (mach_fetch((select v from tk where k='user')))->'settings'->>'
 select t_expect_err(format($$select mach_save_day(%L,%L,'{"dmp-01":{"status":"idle"}}')$$,(select v from tk where k='user'),to_char(current_date-40,'YYYY-MM-DD')), 'locked');
 select case when (mach_save_day((select v from tk where k='user'), to_char(current_date-2,'YYYY-MM-DD'), '{"dmp-01":{"status":"idle"}}'))->>'changed'='1' then 'PASS 2 gün önce kilitli değil' else 'FAIL' end;
 
+-- 8b. kullanıcı silme
+select mach_upsert_person((select v from tk where k='admin'),'p-tmp','Geçici Kişi','tmp@test.kz','user',true,'Gecici123');
+select t_expect_err(format($$select mach_delete_person(%L,'p-huseyin')$$,(select v from tk where k='admin')), 'self');
+select t_expect_err(format($$select mach_delete_person(%L,(select id from people where email='bauyrzhan@test.kz'))$$,(select v from tk where k='admin')), 'has_records');
+select t_expect_err(format($$select mach_delete_person(%L,'p-tmp')$$,(select v from tk where k='user')), 'admin_required');
+select mach_delete_person((select v from tk where k='admin'),'p-tmp');
+select case when not exists (select 1 from people where id='p-tmp') and not exists (select 1 from pins where person_id='p-tmp') then 'PASS kayıtsız kullanıcı silindi (pins dahil)' else 'FAIL delete' end;
+
 -- 9. oturumlar
 select case when jsonb_array_length(mach_sessions((select v from tk where k='admin'))) >= 3 then 'PASS oturum listesi' else 'FAIL sessions' end;
 select t_expect_err(format($$select mach_sessions(%L)$$,(select v from tk where k='user')), 'admin_required');

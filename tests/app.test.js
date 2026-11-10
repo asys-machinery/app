@@ -7,51 +7,7 @@ const L=(dir)=>Object.fromEntries(fs.readdirSync(dir).filter(f=>f.endsWith('.jso
 const TODAY="2026-11-10";
 let pass=0,fail=0;const ok=(n,c,d="")=>{c?pass++:fail++;console.log((c?"PASS ":"FAIL ")+n+(c?"":" — "+d));};
 
-/* ---------- sunucu taklidi (schema.sql ile aynı kurallar) ---------- */
-function makeServer(){
-  const S={people:{},pins:{},sessions:{},machines:L(DATA+'/dbcheck2/machines'),teams:L(DATA+'/dbcheck2/teams'),operators:L(DATA+'/dbcheck2/operators'),days:{},incidents:{},requests:{},settings:{site:{project:"Wildberries Astana",lockDays:3,zones:[]}}};
-  for(const [k,v] of Object.entries(L(DATA+'/dbmig/days')))S.days[k]={date:k,rec:v.rec,saved_by:"p-bauyrzhan",saved_at:v.savedAt||k+"T08:30:00Z",history:v.history||[]};
-  S.people["p-huseyin"]={id:"p-huseyin",name:"Hüseyin Özkan",email:"huseyin.ozkan@asys-machinery.com",role:"admin",active:true};S.pins["p-huseyin"]={pw:"Gecici123",must:true};
-  const err=m=>{throw new Error(m)};
-  const req=(tok,admin,write)=>{const s=S.sessions[tok];if(!s)err("not_logged_in");const p=S.people[s];if(!p||!p.active)err("not_logged_in");if(admin&&p.role!=="admin")err("admin_required");if(write&&p.role==="viewer")err("read_only");return p;};
-  const lock=()=>Number(S.settings.site?.lockDays??3);
-  const addDays=(iso,n)=>{const d=new Date(iso+"T00:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
-  const applyDay=(date,rows,by,reqBy)=>{const cur=S.days[date];const first=!cur;const rec={...(cur?.rec||{})};let hist=(cur?.history||[]).slice();const ch=[];let n=0;
-    for(const [m,nr] of Object.entries(rows||{})){const o=rec[m];if(JSON.stringify(o)!==JSON.stringify(nr)){n++;if(!first)for(const f of ["teamId","opId","loc","status","hrs","hStart","hEnd","fuel","note"]){if(JSON.stringify(o?.[f]??null)!==JSON.stringify(nr?.[f]??null)&&ch.length<40)ch.push({m,f,a:o?.[f]??"",b:nr?.[f]??""});}rec[m]=nr;}}
-    if(!n)return {changed:0};const h={at:new Date().toISOString(),by,n,ch};if(first)h.first=true;if(reqBy)h.requestedBy=reqBy;hist.push(h);hist=hist.slice(-20);
-    S.days[date]={date,rec,saved_by:by,saved_at:new Date().toISOString(),history:hist};return {changed:n};};
-  const F={
-    mach_login:({p_email,p_password})=>{const p=Object.values(S.people).find(x=>x.email?.toLowerCase()===String(p_email).trim().toLowerCase()&&x.active);if(!p||S.pins[p.id]?.pw!==p_password)err("bad_login");const tok=crypto.randomBytes(12).toString("hex");S.sessions[tok]=p.id;p.lastLogin=new Date().toISOString();return {token:tok,person:p.id,name:p.name,role:p.role,mustChange:!!S.pins[p.id].must};},
-    mach_logout:({p_token})=>{delete S.sessions[p_token];return null;},
-    mach_change_password:({p_token,p_old,p_new})=>{const p=req(p_token);if(String(p_new).length<6)err("too_short");if(S.pins[p.id].pw!==p_old)err("bad_old");S.pins[p.id]={pw:p_new,must:false};return null;},
-    mach_fetch:({p_token})=>{const p=req(p_token);const days={};for(const [k,v] of Object.entries(S.days))days[k]={date:k,rec:v.rec,savedBy:v.saved_by,savedAt:v.saved_at,history:v.history};
-      const requests={};for(const [k,v] of Object.entries(S.requests))requests[k]={...v.data,id:k,type:v.type,status:v.status};
-      return {me:{person:p.id,name:p.name,role:p.role,mustChange:!!S.pins[p.id]?.must},people:Object.values(S.people).map(x=>({id:x.id,name:x.name,role:x.role,active:x.active,email:p.role==="admin"?x.email:null,lastLogin:p.role==="admin"?(x.lastLogin||null):null})),machines:S.machines,teams:S.teams,operators:S.operators,days,incidents:S.incidents,requests,settings:S.settings.site||{}};},
-    mach_save_day:({p_token,p_date,p_rows})=>{const p=req(p_token,false,true);if(!/^\d{4}-\d\d-\d\d$/.test(p_date))err("bad_date");if(p.role!=="admin"&&p_date<addDays(TODAY,-lock()))err("locked");return applyDay(p_date,p_rows,p.id,null);},
-    mach_ref_upsert:({p_token,p_col,p_id,p_data})=>{req(p_token,true);if(!S[p_col]||!["machines","teams","operators"].includes(p_col))err("bad_col");S[p_col][p_id]=p_data;return null;},
-    mach_set_setting:({p_token,p_key,p_value})=>{req(p_token,true);S.settings[p_key]=p_value;return null;},
-    mach_incident_set:({p_token,p_id,p_data})=>{req(p_token,false,true);S.incidents[p_id]=p_data;return null;},
-    mach_incident_delete:({p_token,p_id})=>{req(p_token,true);delete S.incidents[p_id];return null;},
-    mach_request_create:({p_token,p_id,p_type,p_payload,p_summary})=>{const p=req(p_token,false,true);if(!["machine_add","toggle","team_add","operator_add","day_edit"].includes(p_type))err("bad_type");S.requests[p_id]={type:p_type,status:"pending",data:{payload:p_payload,summary:p_summary||"",by:p.id,at:new Date().toISOString()}};return null;},
-    mach_decide:({p_token,p_id,p_approve})=>{const p=req(p_token,true);const r=S.requests[p_id];if(!r)err("no_request");if(r.status!=="pending")err("already_decided");const pl=r.data.payload||{};
-      if(p_approve){if(r.type==="machine_add"){const m=pl.machine;S.machines[m.id]={...(S.machines[m.id]||{}),...Object.fromEntries(Object.entries(m).filter(([k,v])=>v!=null)),active:true};}
-        else if(r.type==="team_add"){S.teams[pl.team.id]={...(S.teams[pl.team.id]||{}),...pl.team,active:true};}
-        else if(r.type==="operator_add"){S.operators[pl.operator.id]={...(S.operators[pl.operator.id]||{}),...pl.operator,active:true};}
-        else if(r.type==="toggle"){const o=S[pl.col]?.[pl.id];if(o)o.active=!!pl.active;}
-        else if(r.type==="day_edit"){applyDay(pl.date,pl.rows,p.id,r.data.by);}}
-      r.status=p_approve?"approved":"rejected";r.data.decidedBy=p.id;r.data.decidedAt=new Date().toISOString();return null;},
-    mach_upsert_person:({p_token,p_id,p_name,p_email,p_role,p_active,p_password})=>{const p=req(p_token,true);if(!["admin","user","viewer"].includes(p_role))err("bad_role");if(!p_email||!p_email.includes("@"))err("bad_email");if(!String(p_name||"").trim())err("name_required");
-      const id=p_id||("p"+crypto.randomBytes(5).toString("hex"));if(id===p.id&&(p_role!=="admin"||p_active===false)){if(!Object.values(S.people).some(x=>x.role==="admin"&&x.active&&x.id!==p.id))err("last_admin");}
-      if(Object.values(S.people).some(x=>x.id!==id&&x.email?.toLowerCase()===p_email.toLowerCase()))err('duplicate key value violates unique constraint "people_email_idx"');
-      S.people[id]={id,name:p_name.trim(),email:p_email.toLowerCase(),role:p_role,active:p_active!==false};
-      if(p_password&&p_password.length>=6){S.pins[id]={pw:p_password,must:true};if(id!==p.id)for(const [t,pid] of Object.entries(S.sessions))if(pid===id)delete S.sessions[t];}
-      return S.people[id];},
-    mach_sessions:({p_token})=>{req(p_token,true);return Object.entries(S.sessions).map(([t,pid])=>({person:pid,at:new Date().toISOString()}));},
-    mach_revoke_person:({p_token,p_person})=>{req(p_token,true);for(const [t,pid] of Object.entries(S.sessions))if(pid===p_person&&t!==p_token)delete S.sessions[t];return null;},
-  };
-  return {S,call:(name,args)=>{if(!F[name])throw new Error("no such function "+name);return F[name](args||{});}};
-}
-
+const {makeServer}=require('./mock_server');
 /* ---------- tarayıcı yardımcıları ---------- */
 (async()=>{
   const server=makeServer();
@@ -112,6 +68,24 @@ function makeServer(){
   await A.pg.locator('#pplList button').filter({hasText:/Сбросить/}).last().click();await A.pg.waitForTimeout(200);await A.pg.fill('#inpVal','Yeni12345');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
   ok("B5c Şifre sıfırlama modal ile çalıştı",Object.values(server.S.pins).some(x=>x.pw==='Yeni12345'&&x.must===true));
   await A.pg.locator('#pplList button').filter({hasText:/Сбросить/}).last().click();await A.pg.waitForTimeout(200);await A.pg.fill('#inpVal','Gecici123');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
+  // ad düzenleme, silme (kayıtsız kişi silinir, kayıtlı kişi silinmez)
+  await A.pg.locator('#pplList a').filter({hasText:'Гость'}).click();await A.pg.waitForTimeout(200);await A.pg.fill('#inpVal','Гость Тест');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
+  ok("B7 Ad düzenlendi",Object.values(server.S.people).some(x=>x.name==='Гость Тест'));
+  await A.pg.fill('#pName','Silinecek');await A.pg.fill('#pEmail','sil@test.kz');await A.pg.fill('#pPass','Gecici123');await A.pg.click('#addPerson');await A.pg.waitForTimeout(400);
+  const delRow=A.pg.locator('#pplList tr').filter({hasText:'Silinecek'});await delRow.locator('button[title]').last().click();await A.pg.waitForTimeout(200);
+  ok("B8 Silme onayı soruluyor",await vis(A.pg,'#modal'));await A.pg.click('#modalYes');await A.pg.waitForTimeout(400);
+  ok("B9 Kayıtsız kullanıcı silindi",!Object.values(server.S.people).some(x=>x.email==='sil@test.kz')&&!/Silinecek/.test(await A.pg.textContent('#pplList')));
+  ok("B10 Kendi satırında sil düğmesi yok",(await A.pg.locator('#pplList tr').filter({hasText:'Hüseyin'}).locator('button[title]').count())===0);
+  // tanımlar: makine düzenle
+  await A.pg.click('text=Справочники');await A.pg.waitForTimeout(300);
+  await A.pg.locator('#refMach tr').filter({hasText:'Д-01'}).locator('button').filter({hasText:/Изменить/}).click();await A.pg.waitForTimeout(200);
+  ok("B11 Makine düzenleme formu açıldı, kod dolu",await vis(A.pg,'#mForm')&&(await A.pg.inputValue('#frmFields [data-k=code]'))==='Д-01');
+  await A.pg.fill('#frmFields [data-k=year]','2021');await A.pg.fill('#frmFields [data-k=plate]','777AAA01');await A.pg.click('#frmOk');await A.pg.waitForTimeout(400);
+  ok("B12 Makine güncellendi (yıl, plaka), diğer alanlar korundu",server.S.machines['dmp-01'].year===2021&&server.S.machines['dmp-01'].plate==='777AAA01'&&server.S.machines['dmp-01'].brand==='HAULOTTE');
+  await A.pg.locator('#refTeam tr').nth(1).locator('button').filter({hasText:/Изменить/}).click();await A.pg.waitForTimeout(200);await A.pg.fill('#frmFields [data-k=name]','Бригада Тест');await A.pg.click('#frmOk');await A.pg.waitForTimeout(400);
+  ok("B13 Ekip adı değişti",Object.values(server.S.teams).some(x=>x.name==='Бригада Тест'));
+  await A.pg.locator('#refOp tr').nth(1).locator('button').filter({hasText:/Изменить/}).click();await A.pg.waitForTimeout(200);const opName=await A.pg.inputValue('#frmFields [data-k=name]');await A.pg.fill('#frmFields [data-k=name]',opName+' X');await A.pg.click('#frmOk');await A.pg.waitForTimeout(400);
+  ok("B14 Operatör adı değişti",Object.values(server.S.operators).some(x=>x.name===opName+' X'));
   ok("B6 Admin oturumu hatasız",A.errs.length===0,A.errs.join("|"));
 
   /* C. kullanıcı: günlük kayıt → sunucu merge + geçmiş */
@@ -150,6 +124,13 @@ function makeServer(){
   await A.pg.locator('#reqBody button').filter({hasText:/Подтвердить/}).first().click();await A.pg.waitForTimeout(600);
   const d01=server.S.days["2026-11-01"];
   ok("D4 Onay → sunucuda uygulandı, geçmişte requestedBy",d01.rec["dmp-05"].status==="absent"&&d01.history[d01.history.length-1].requestedBy!=="p-huseyin"&&d01.history[d01.history.length-1].by==="p-huseyin"&&rq[0].status==="approved");
+
+  /* D2. arıza düzenleme (admin) */
+  server.call('mach_incident_set',{p_token:Object.keys(server.S.sessions).find(t=>server.S.sessions[t]==='p-huseyin'),p_id:'incX',p_data:{id:'incX',date:'2026-11-09',machineId:'dmp-04',type:'breakdown',opId:'',teamId:'',down:2,cost:0,desc:'старое',open:true,by:'p-huseyin'}});
+  await A.pg.evaluate(()=>loadAll());await A.pg.waitForTimeout(300);await A.pg.click('text=Поломки');await A.pg.waitForTimeout(300);
+  await A.pg.locator('#incTbl tr').filter({hasText:'Д-04'}).locator('button').filter({hasText:/Изменить/}).click();await A.pg.waitForTimeout(200);
+  await A.pg.fill('#frmFields [data-k=desc]','новое описание');await A.pg.fill('#frmFields [data-k=down]','6');await A.pg.click('#frmOk');await A.pg.waitForTimeout(400);
+  ok("D5 Arıza kaydı düzenlendi (açıklama, duruş)",server.S.incidents.incX.desc==='новое описание'&&server.S.incidents.incX.down===6&&server.S.incidents.incX.open===true);
 
   /* E. makine ekleme talebi + red */
   await U.pg.click('text=Справочники');await U.pg.waitForTimeout(200);await U.pg.fill('#mCode','Д-21');await U.pg.fill('#mBrand','Тест 1');await U.pg.click('#addMachine');await U.pg.waitForTimeout(400);

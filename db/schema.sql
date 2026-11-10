@@ -316,13 +316,28 @@ begin
   delete from sessions where person_id = p_person and token <> p_token;
 end $$;
 
+create or replace function mach_delete_person(p_token text, p_person text)
+returns void language plpgsql security definer as $$
+declare p people; n int;
+begin
+  p := mach_require(p_token, true);
+  if p_person = p.id then raise exception 'self'; end if;
+  select count(*) into n from days where saved_by = p_person
+    or exists (select 1 from jsonb_array_elements(history) h where h->>'by' = p_person or h->>'requestedBy' = p_person);
+  if n > 0 then raise exception 'has_records'; end if;
+  select count(*) into n from incidents where data->>'by' = p_person;
+  if n > 0 then raise exception 'has_records'; end if;
+  select count(*) into n from requests where data->>'by' = p_person or data->>'decidedBy' = p_person;
+  if n > 0 then raise exception 'has_records'; end if;
+  delete from people where id = p_person;   -- pins ve sessions cascade ile silinir
+end $$;
 -- ---------- yetkiler ----------
 grant execute on function
   mach_login(text,text), mach_logout(text), mach_change_password(text,text,text), mach_fetch(text,text),
   mach_save_day(text,text,jsonb), mach_ref_upsert(text,text,text,jsonb), mach_set_setting(text,text,jsonb),
   mach_incident_set(text,text,jsonb), mach_incident_delete(text,text),
   mach_request_create(text,text,text,jsonb,text), mach_decide(text,text,boolean),
-  mach_upsert_person(text,text,text,text,text,boolean,text), mach_sessions(text), mach_revoke_person(text,text)
+  mach_upsert_person(text,text,text,text,text,boolean,text), mach_sessions(text), mach_revoke_person(text,text), mach_delete_person(text,text)
   to anon, authenticated;
 revoke execute on function mach_require(text,boolean,boolean), mach_lock_days() from anon, authenticated, public;
 
