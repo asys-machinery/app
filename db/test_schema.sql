@@ -16,6 +16,9 @@ select case when (mach_login('HUSEYIN.OZKAN@asys-machinery.com','__GECICI_SIFRE_
 select t_expect_err($$select mach_login('huseyin.ozkan@asys-machinery.com','yanlis')$$, 'bad_login');
 select t_expect_err($$select mach_fetch('yok-token')$$, 'not_logged_in');
 
+select case when (select last_login from people where id='p-huseyin') is not null then 'PASS last_login girişte güncellendi' else 'FAIL last_login' end;
+select case when (mach_fetch((select v from tk where k='admin')))->'people'->0->>'lastLogin' is not null then 'PASS lastLogin admin fetch' else 'FAIL lastLogin fetch' end;
+
 -- 2. şifre değiştir
 select t_expect_err(format($$select mach_change_password(%L,'yanlis','Yeni123456')$$,(select v from tk where k='admin')), 'bad_old');
 select t_expect_err(format($$select mach_change_password(%L,'__GECICI_SIFRE__','123')$$,(select v from tk where k='admin')), 'too_short');

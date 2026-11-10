@@ -12,7 +12,8 @@ create table if not exists people (
   email       text,
   role        text not null default 'user' check (role in ('admin','user','viewer')),
   active      boolean not null default true,
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  last_login  timestamptz
 );
 create unique index if not exists people_email_idx on people (lower(email));
 
@@ -102,6 +103,7 @@ begin
   if h is null or h <> crypt(p_password, h) then raise exception 'bad_login'; end if;
   tok := encode(gen_random_bytes(24), 'hex');
   insert into sessions(token, person_id) values (tok, p.id);
+  update people set last_login = now() where id = p.id;
   return jsonb_build_object('token', tok, 'person', p.id, 'name', p.name, 'role', p.role, 'mustChange', coalesce(mc,false));
 end $$;
 
@@ -131,7 +133,8 @@ begin
   return jsonb_build_object(
     'me', jsonb_build_object('person', p.id, 'name', p.name, 'role', p.role, 'mustChange', coalesce(mc,false)),
     'people', coalesce((select jsonb_agg(jsonb_build_object('id',id,'name',name,'role',role,'active',active,
-                 'email', case when p.role='admin' then email else null end) order by name) from people), '[]'::jsonb),
+                 'email', case when p.role='admin' then email else null end,
+                 'lastLogin', case when p.role='admin' then last_login else null end) order by name) from people), '[]'::jsonb),
     'machines',  coalesce((select jsonb_object_agg(id, data) from machines),  '{}'::jsonb),
     'teams',     coalesce((select jsonb_object_agg(id, data) from teams),     '{}'::jsonb),
     'operators', coalesce((select jsonb_object_agg(id, data) from operators), '{}'::jsonb),

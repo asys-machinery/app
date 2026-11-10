@@ -21,12 +21,12 @@ function makeServer(){
     if(!n)return {changed:0};const h={at:new Date().toISOString(),by,n,ch};if(first)h.first=true;if(reqBy)h.requestedBy=reqBy;hist.push(h);hist=hist.slice(-20);
     S.days[date]={date,rec,saved_by:by,saved_at:new Date().toISOString(),history:hist};return {changed:n};};
   const F={
-    mach_login:({p_email,p_password})=>{const p=Object.values(S.people).find(x=>x.email?.toLowerCase()===String(p_email).trim().toLowerCase()&&x.active);if(!p||S.pins[p.id]?.pw!==p_password)err("bad_login");const tok=crypto.randomBytes(12).toString("hex");S.sessions[tok]=p.id;return {token:tok,person:p.id,name:p.name,role:p.role,mustChange:!!S.pins[p.id].must};},
+    mach_login:({p_email,p_password})=>{const p=Object.values(S.people).find(x=>x.email?.toLowerCase()===String(p_email).trim().toLowerCase()&&x.active);if(!p||S.pins[p.id]?.pw!==p_password)err("bad_login");const tok=crypto.randomBytes(12).toString("hex");S.sessions[tok]=p.id;p.lastLogin=new Date().toISOString();return {token:tok,person:p.id,name:p.name,role:p.role,mustChange:!!S.pins[p.id].must};},
     mach_logout:({p_token})=>{delete S.sessions[p_token];return null;},
     mach_change_password:({p_token,p_old,p_new})=>{const p=req(p_token);if(String(p_new).length<6)err("too_short");if(S.pins[p.id].pw!==p_old)err("bad_old");S.pins[p.id]={pw:p_new,must:false};return null;},
     mach_fetch:({p_token})=>{const p=req(p_token);const days={};for(const [k,v] of Object.entries(S.days))days[k]={date:k,rec:v.rec,savedBy:v.saved_by,savedAt:v.saved_at,history:v.history};
       const requests={};for(const [k,v] of Object.entries(S.requests))requests[k]={...v.data,id:k,type:v.type,status:v.status};
-      return {me:{person:p.id,name:p.name,role:p.role,mustChange:!!S.pins[p.id]?.must},people:Object.values(S.people).map(x=>({id:x.id,name:x.name,role:x.role,active:x.active,email:p.role==="admin"?x.email:null})),machines:S.machines,teams:S.teams,operators:S.operators,days,incidents:S.incidents,requests,settings:S.settings.site||{}};},
+      return {me:{person:p.id,name:p.name,role:p.role,mustChange:!!S.pins[p.id]?.must},people:Object.values(S.people).map(x=>({id:x.id,name:x.name,role:x.role,active:x.active,email:p.role==="admin"?x.email:null,lastLogin:p.role==="admin"?(x.lastLogin||null):null})),machines:S.machines,teams:S.teams,operators:S.operators,days,incidents:S.incidents,requests,settings:S.settings.site||{}};},
     mach_save_day:({p_token,p_date,p_rows})=>{const p=req(p_token,false,true);if(!/^\d{4}-\d\d-\d\d$/.test(p_date))err("bad_date");if(p.role!=="admin"&&p_date<addDays(TODAY,-lock()))err("locked");return applyDay(p_date,p_rows,p.id,null);},
     mach_ref_upsert:({p_token,p_col,p_id,p_data})=>{req(p_token,true);if(!S[p_col]||!["machines","teams","operators"].includes(p_col))err("bad_col");S[p_col][p_id]=p_data;return null;},
     mach_set_setting:({p_token,p_key,p_value})=>{req(p_token,true);S.settings[p_key]=p_value;return null;},
@@ -90,9 +90,13 @@ function makeServer(){
   ok("A8 10.11 günü dünden (09.11) ön-doldu: 48 satır",(await A.pg.locator('#entryTbl tr[data-id]').count())===48);
   ok("A9 Puantaj son kayıtlı güne (09.11) atladı",(await A.pg.evaluate(()=>puanDate))==="2026-11-09");
 
-  /* B. kişiler yönetimi */
+  /* B. kişiler yönetimi (Ayarlar sekmesi) */
   await A.pg.click('text=Справочники');await A.pg.waitForTimeout(300);
-  ok("B1 Kişiler formu admin'e görünür, e-posta sütunu var",await vis(A.pg,'#pplForm')&&/huseyin.ozkan@/.test(await A.pg.textContent('#pplList')));
+  ok("B0 Tanımlar'da artık kullanıcı/ayar kartı yok",!(await vis(A.pg,'#pplForm'))&&!(await vis(A.pg,'#zonesTxt'))&&(await A.pg.locator('#ref .card').count())===4);
+  await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);
+  ok("B1 Ayarlar: kişiler formu admin'e görünür, e-posta + son giriş sütunu var",await vis(A.pg,'#pplForm')&&/huseyin.ozkan@/.test(await A.pg.textContent('#pplList'))&&/Последний вход/.test(await A.pg.textContent('#pplList')));
+  await A.pg.fill('#projInp','Wildberries Astana · Склад 2');await A.pg.click('#saveProj');await A.pg.waitForTimeout(300);
+  ok("B1b Proje adı ayardan değişti → başlıkta",server.S.settings.site.project==='Wildberries Astana · Склад 2'&&/Склад 2/.test(await A.pg.textContent('#hdrProj')));
   await A.pg.click('#addPerson');await A.pg.waitForTimeout(200);
   ok("B2 Boş form → uyarı",/Заполните/.test(await A.pg.textContent('#toast')));
   await A.pg.fill('#pName','Бауыржан Беркынбай');await A.pg.fill('#pEmail','bauyrzhan@test.kz');await A.pg.selectOption('#pRole','user');await A.pg.fill('#pPass','Gecici123');await A.pg.click('#addPerson');await A.pg.waitForTimeout(400);
@@ -102,16 +106,20 @@ function makeServer(){
   ok("B4 Aynı e-posta → uyarı, eklenmedi",/уже есть/.test(await A.pg.textContent('#toast'))&&Object.keys(server.S.people).length===3);
   const selfRole=A.pg.locator('#pplList tr').filter({hasText:'Hüseyin'}).locator('select');await selfRole.selectOption('user');await A.pg.waitForTimeout(300);
   ok("B5 Son yönetici kendini düşüremez",/последний администратор/.test(await A.pg.textContent('#toast'))&&server.S.people["p-huseyin"].role==="admin");
-  A.pg.once('dialog',d=>d.accept('bauyrzhan@asys-machinery.com'));await A.pg.locator('#pplList a').filter({hasText:'bauyrzhan@test.kz'}).click();await A.pg.waitForTimeout(400);
+  await A.pg.locator('#pplList a').filter({hasText:'bauyrzhan@test.kz'}).click();await A.pg.waitForTimeout(200);ok("B5a E-posta düzenleme penceresi açıldı",await vis(A.pg,'#mInput'));await A.pg.fill('#inpVal','bauyrzhan@asys-machinery.com');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
   ok("B5b E-posta tablodan düzenlendi",Object.values(server.S.people).some(x=>x.email==='bauyrzhan@asys-machinery.com')&&!Object.values(server.S.people).some(x=>x.email==='bauyrzhan@test.kz'));
-  A.pg.once('dialog',d=>d.accept('bauyrzhan@test.kz'));await A.pg.locator('#pplList a').filter({hasText:'bauyrzhan@asys-machinery.com'}).click();await A.pg.waitForTimeout(400);
+  await A.pg.locator('#pplList a').filter({hasText:'bauyrzhan@asys-machinery.com'}).click();await A.pg.waitForTimeout(200);await A.pg.fill('#inpVal','bauyrzhan@test.kz');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
+  await A.pg.locator('#pplList button').filter({hasText:/Сбросить/}).last().click();await A.pg.waitForTimeout(200);await A.pg.fill('#inpVal','Yeni12345');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
+  ok("B5c Şifre sıfırlama modal ile çalıştı",Object.values(server.S.pins).some(x=>x.pw==='Yeni12345'&&x.must===true));
+  await A.pg.locator('#pplList button').filter({hasText:/Сбросить/}).last().click();await A.pg.waitForTimeout(200);await A.pg.fill('#inpVal','Gecici123');await A.pg.click('#inpOk');await A.pg.waitForTimeout(400);
   ok("B6 Admin oturumu hatasız",A.errs.length===0,A.errs.join("|"));
 
   /* C. kullanıcı: günlük kayıt → sunucu merge + geçmiş */
   const U=await open();await login(U.pg,'bauyrzhan@test.kz','Gecici123');await U.pg.waitForTimeout(300);
   ok("C1 Kullanıcı girişi → zorunlu şifre penceresi",await vis(U.pg,'#mPw'));
   await U.pg.fill('#pwOld','Gecici123');await U.pg.fill('#pwNew','User12345');await U.pg.fill('#pwNew2','User12345');await U.pg.click('#pwSave');await U.pg.waitForTimeout(300);
-  ok("C2 Rozet Пользователь, e-posta sütunu yok",/Пользователь/.test(await U.pg.textContent('#whoami'))&&!/huseyin.ozkan@/.test(await U.pg.textContent('#pplList')));
+  await U.pg.click('text=Настройки');await U.pg.waitForTimeout(300);
+  ok("C2 Kullanıcı: rozet Пользователь; Ayarlar'da yalnız Hesabım (kişiler/proje/bölge gizli)",/Пользователь/.test(await U.pg.textContent('#whoami'))&&await vis(U.pg,'#accCard')&&!(await vis(U.pg,'#pplForm'))&&!(await vis(U.pg,'#projInp'))&&/Бауыржан/.test(await U.pg.textContent('#accInfo')));
   await U.pg.click('text=Журнал дня');await U.pg.waitForTimeout(300);
   const row=U.pg.locator('#entryTbl tr[data-id="dmp-03"]');await row.locator('[data-f=status]').selectOption('broken');await row.locator('[data-f=note]').fill('гидравлика');
   await U.pg.click('#saveDay');await U.pg.waitForTimeout(300);if(await vis(U.pg,'#modal'))await U.pg.click('#modalYes');await U.pg.waitForTimeout(600);
