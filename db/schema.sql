@@ -38,7 +38,7 @@ create table if not exists days (
   rec         jsonb not null default '{}'::jsonb, -- {machineId: {teamId,opId,loc,status,hrs,hStart,hEnd,fuel,note}}
   saved_by    text not null default '',
   saved_at    timestamptz not null default now(),
-  history     jsonb not null default '[]'::jsonb  -- [{at,by,n,first,ch:[{m,f,from,to}],requestedBy}]
+  history     jsonb not null default '[]'::jsonb  -- [{at,by,n,first,ch:[{m,f,a,b}],requestedBy}]
 );
 
 create table if not exists incidents (
@@ -160,7 +160,7 @@ begin
       if not first then
         foreach f in array array['teamId','opId','loc','status','hrs','hStart','hEnd','fuel','note'] loop
           if (oldrow->f) is distinct from (newrow->f) and jsonb_array_length(ch) < 40 then
-            ch := ch || jsonb_build_array(jsonb_build_object('m', m, 'f', f, 'from', coalesce(oldrow->f,'null'::jsonb), 'to', coalesce(newrow->f,'null'::jsonb)));
+            ch := ch || jsonb_build_array(jsonb_build_object('m', m, 'f', f, 'a', coalesce(oldrow->f,'""'::jsonb), 'b', coalesce(newrow->f,'""'::jsonb)));
           end if;
         end loop;
       end if;
