@@ -14,6 +14,11 @@ let pass=0,fail=0;const ok=(n,c,d="")=>{c?pass++:fail++;console.log((c?"PASS ":"
   // açık arıza + talep örnekleri
   server.call('mach_incident_set',{p_token:tok,p_id:'inc1',p_data:{id:'inc1',date:'2026-11-09',machineId:'dmp-03',type:'breakdown',opId:'',teamId:'',down:4,cost:0,desc:'тест',open:true,by:'p-huseyin'}});
   server.call('mach_request_create',{p_token:tok,p_id:'r1',p_type:'team_add',p_payload:{team:{id:'t_x',name:'Бригада X'}},p_summary:'Бригада X'});
+  // ikinci şantiye + parkta bir makine + bir taşıma kaydı → çoklu şantiye arayüzü de taranır
+  server.call('mach_site_upsert',{p_token:tok,p_id:'s-alm',p_name:'Wildberries Almaty',p_active:true,p_data:{lockDays:3,zones:['Блок A']}});
+  server.call('mach_move_machine',{p_token:tok,p_machine:'dmp-04',p_to_site:'s-alm',p_date:'2026-11-09',p_note:'тест'});
+  server.call('mach_move_machine',{p_token:tok,p_machine:'dmp-05',p_to_site:'',p_date:'2026-11-09',p_note:''});
+  server.call('mach_upsert_person',{p_token:tok,p_id:Object.values(server.S.people).find(x=>x.email==='b@test.kz').id,p_name:'Бауыржан',p_email:'b@test.kz',p_role:'user',p_active:true,p_password:null,p_sites:['wb-astana']});
   const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1243/chrome-linux64/chrome'});
   const site=fs.mkdtempSync('/tmp/asyssmoke-');for(const f of fs.readdirSync(ROOT)){if(f===".git"||f==="tests"||f==="db")continue;const s=path.join(ROOT,f);fs.statSync(s).isDirectory()?fs.cpSync(s,path.join(site,f),{recursive:true}):fs.copyFileSync(s,path.join(site,f));}
   fs.writeFileSync(path.join(site,'config.js'),'window.MACH_CONFIG={url:"https://test.supabase.co",key:"test-key"};');
@@ -22,7 +27,7 @@ let pass=0,fail=0;const ok=(n,c,d="")=>{c?pass++:fail++;console.log((c?"PASS ":"
   for(const [email,pw,role] of [['huseyin.ozkan@asys-machinery.com','Gecici123','admin'],['b@test.kz','Gecici123','user'],['v@test.kz','Gecici123','viewer']]){
     for(const lang of ['ru','tr']){
       const ctx=await b.newContext({viewport:{width:1300,height:900},acceptDownloads:true});const pg=await ctx.newPage();const errs=[];
-      pg.on('pageerror',e=>errs.push('pageerror: '+e.message));pg.on('console',m=>{if(m.type()==='error'&&!/net::|TUNNEL|Failed to load resource|ServiceWorker|bad_login|duplicate key|last_admin|locked|read_only|admin_required|bad_old|no_request|already_decided/.test(m.text()))errs.push('console: '+m.text());});
+      pg.on('pageerror',e=>errs.push('pageerror: '+e.message));pg.on('console',m=>{if(m.type()==='error'&&!/net::|TUNNEL|Failed to load resource|ServiceWorker|bad_login|duplicate key|last_admin|locked|read_only|admin_required|bad_old|no_request|already_decided|site_has_machines|same_site|no_site_access|site_required/.test(m.text()))errs.push('console: '+m.text());});
       pg.on('dialog',d=>d.accept());
       await pg.route(/cdn\.jsdelivr\.net|fonts\.g/,r=>r.abort());
       await pg.exposeFunction('__rpc',(name,args)=>{try{return {data:server.call(name,args)};}catch(e){return {error:{message:e.message}};}});
@@ -30,6 +35,7 @@ let pass=0,fail=0;const ok=(n,c,d="")=>{c?pass++:fail++;console.log((c?"PASS ":"
       await pg.goto('file://'+site+'/index.html',{waitUntil:'load'});await pg.waitForTimeout(500);
       await pg.fill('#lEmail',email);await pg.fill('#lPass',pw);await pg.click('#lBtn');await pg.waitForTimeout(600);
       if(await pg.locator('#mPw').isVisible()){await pg.fill('#pwOld',pw);await pg.fill('#pwNew','Yeni12345');await pg.fill('#pwNew2','Yeni12345');await pg.click('#pwSave');await pg.waitForTimeout(300);server.S.pins[Object.values(server.S.people).find(x=>x.email===email).id]={pw,must:false};}
+      if(role==='admin'&&lang==='tr'){await pg.selectOption('#siteSel','*');await pg.waitForTimeout(300);}
       const toasts=new Set();const badText=[];let clicks=0;
       for(const tab of ['today','entry','puan','inc','an','req','ref','set']){
         await pg.evaluate(t=>showTab(t),tab);await pg.waitForTimeout(250);

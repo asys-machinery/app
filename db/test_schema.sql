@@ -26,8 +26,9 @@ select mach_change_password((select v from tk where k='admin'),'__GECICI_SIFRE__
 select case when (mach_fetch((select v from tk where k='admin')))->'me'->>'mustChange' = 'false' then 'PASS şifre değişti, mustChange false' else 'FAIL mustChange after change' end;
 
 -- 3. kişiler: kullanıcı + viewer ekle
-select mach_upsert_person((select v from tk where k='admin'),'', 'Бауыржан Беркынбай','bauyrzhan@test.kz','user',true,'Gecici123');
-select mach_upsert_person((select v from tk where k='admin'),'p-view', 'Gözlemci','viewer@test.kz','viewer',true,'Gecici123');
+select mach_upsert_person((select v from tk where k='admin'),'', 'Бауыржан Беркынбай','bauyrzhan@test.kz','user',true,'Gecici123','["wb-astana"]');
+select mach_upsert_person((select v from tk where k='admin'),'p-view', 'Gözlemci','viewer@test.kz','viewer',true,'Gecici123','["wb-astana","yok-site"]');
+select case when (select sites from people where id='p-view') = '["wb-astana"]'::jsonb then 'PASS sites: var olmayan şantiye süzüldü' else 'FAIL sites filter' end;
 select t_expect_err(format($$select mach_upsert_person(%L,'','X','yok','user',true,'Gecici123')$$,(select v from tk where k='admin')), 'bad_email');
 select t_expect_err(format($$select mach_upsert_person(%L,'','X','x@x.kz','boss',true,'Gecici123')$$,(select v from tk where k='admin')), 'bad_role');
 select t_expect_err(format($$select mach_upsert_person(%L,'p-huseyin','Hüseyin Özkan','huseyin.ozkan@asys-machinery.com','user',true,null)$$,(select v from tk where k='admin')), 'last_admin');
@@ -42,8 +43,8 @@ select t_expect_err(format($$select mach_ref_upsert(%L,'machines','m1','{"code":
 select t_expect_err(format($$select mach_set_setting(%L,'site','{}')$$,(select v from tk where k='user')), 'admin_required');
 
 -- 4. tanımlar
-select mach_ref_upsert((select v from tk where k='admin'),'machines','dmp-01','{"id":"dmp-01","code":"Д-01","type":"Ножничный подъёмник","active":true}');
-select mach_ref_upsert((select v from tk where k='admin'),'machines','dmp-02','{"id":"dmp-02","code":"Д-02","type":"Ножничный подъёмник","active":true}');
+select mach_ref_upsert((select v from tk where k='admin'),'machines','dmp-01','{"id":"dmp-01","code":"Д-01","type":"Ножничный подъёмник","active":true,"site":"wb-astana"}');
+select mach_ref_upsert((select v from tk where k='admin'),'machines','dmp-02','{"id":"dmp-02","code":"Д-02","type":"Ножничный подъёмник","active":true,"site":"wb-astana"}');
 select mach_ref_upsert((select v from tk where k='admin'),'teams','t1','{"id":"t1","name":"Бригада Муратов","active":true}');
 select mach_ref_upsert((select v from tk where k='admin'),'operators','o1','{"id":"o1","name":"Ерик","teamId":"t1","active":true}');
 select t_expect_err(format($$select mach_ref_upsert(%L,'users','x','{}')$$,(select v from tk where k='admin')), 'bad_col');
@@ -93,7 +94,7 @@ select case when data->>'code'='Д-21' and (data->>'active')='true' and (data->>
 select case when (data->>'active')='false' and data->>'code'='Д-02' then 'PASS toggle onayı → Д-02 pasif, diğer alanlar korundu' else 'FAIL toggle' end from machines where id='dmp-02';
 select case when not exists (select 1 from teams where id='t2') then 'PASS red → ekip eklenmedi' else 'FAIL reject applied' end;
 select case when data->>'name'='Тестов' and data->>'teamId'='t1' then 'PASS operator_add onayı' else 'FAIL op' end from operators where id='o2';
-select case when rec->'dmp-01'->>'status'='absent' and history->-1->>'requestedBy' is not null and history->-1->>'by'='p-huseyin' then 'PASS day_edit onayı → uygulandı, requestedBy kayıtlı' else 'FAIL day_edit '||history::text end from days where date=to_char(current_date-10,'YYYY-MM-DD');
+select case when rec->'dmp-01'->>'status'='absent' and history->-1->>'requestedBy' is not null and history->-1->>'by'='p-huseyin' then 'PASS day_edit onayı → uygulandı, requestedBy kayıtlı' else 'FAIL day_edit '||history::text end from days where site='wb-astana' and date=to_char(current_date-10,'YYYY-MM-DD');
 select case when status='rejected' and data->>'decidedBy'='p-huseyin' and data->>'decidedAt' is not null then 'PASS red kaydı decidedBy/At' else 'FAIL' end from requests where id='r3';
 
 -- 8. ayarlar + kilit süresi
@@ -109,6 +110,60 @@ select t_expect_err(format($$select mach_delete_person(%L,(select id from people
 select t_expect_err(format($$select mach_delete_person(%L,'p-tmp')$$,(select v from tk where k='user')), 'admin_required');
 select mach_delete_person((select v from tk where k='admin'),'p-tmp');
 select case when not exists (select 1 from people where id='p-tmp') and not exists (select 1 from pins where person_id='p-tmp') then 'PASS kayıtsız kullanıcı silindi (pins dahil)' else 'FAIL delete' end;
+
+-- 8c. ÇOKLU ŞANTİYE
+select t_expect_err(format($$select mach_site_upsert(%L,'','Yeni','true','{}')$$,(select v from tk where k='user')), 'admin_required');
+select t_expect_err(format($$select mach_site_upsert(%L,'','  ',true,'{}')$$,(select v from tk where k='admin')), 'name_required');
+select mach_site_upsert((select v from tk where k='admin'),'s-alm','Wildberries Almaty',true,'{"lockDays":5,"zones":["Блок A"]}');
+select case when (mach_fetch((select v from tk where k='admin')))->'sites'->'s-alm'->>'name'='Wildberries Almaty' then 'PASS şantiye eklendi, fetch' else 'FAIL site fetch' end;
+-- kullanıcı yalnızca kendi şantiyesinin verisini görür; parktaki makineleri görür
+select mach_ref_upsert((select v from tk where k='admin'),'machines','alm-01','{"id":"alm-01","code":"A-01","type":"Телескоп","active":true,"site":"s-alm"}');
+select mach_ref_upsert((select v from tk where k='admin'),'machines','park-01','{"id":"park-01","code":"P-01","type":"Кран","active":true}');
+select mach_ref_upsert((select v from tk where k='admin'),'teams','t-alm','{"id":"t-alm","name":"Бригада Алматы","active":true,"site":"s-alm"}');
+select case when (select site from machines where id='alm-01')='s-alm' and (select site from machines where id='park-01')='' and (select data ? 'site' from machines where id='alm-01')=false then 'PASS site sütuna yazıldı, veride tutulmadı' else 'FAIL site column' end;
+select case when ((mach_fetch((select v from tk where k='user')))->'machines' ? 'alm-01')=false and ((mach_fetch((select v from tk where k='user')))->'machines' ? 'park-01')=true and ((mach_fetch((select v from tk where k='user')))->'machines' ? 'dmp-01')=true then 'PASS kullanıcı: kendi şantiyesi + park makineleri' else 'FAIL user machines' end;
+select case when ((mach_fetch((select v from tk where k='user')))->'teams' ? 't-alm')=false and ((mach_fetch((select v from tk where k='admin')))->'teams' ? 't-alm')=true then 'PASS kullanıcı başka şantiyenin ekibini görmez' else 'FAIL teams filter' end;
+select case when (mach_fetch((select v from tk where k='admin')))->'machines'->'alm-01'->>'site'='s-alm' then 'PASS fetch makineye site ekler' else 'FAIL' end;
+-- gün kaydı: şantiye zorunlu / erişim / kilit şantiyeye göre
+select t_expect_err(format($$select mach_save_day(%L,%L,'{"alm-01":{"status":"idle"}}','s-alm')$$,(select v from tk where k='user'),to_char(current_date,'YYYY-MM-DD')), 'no_site_access');
+select t_expect_err(format($$select mach_save_day(%L,%L,'{}','yok')$$,(select v from tk where k='admin'),to_char(current_date,'YYYY-MM-DD')), 'bad_site');
+select t_expect_err(format($$select mach_save_day(%L,%L,'{}')$$,(select v from tk where k='admin'),to_char(current_date,'YYYY-MM-DD')), 'site_required');
+select case when (mach_save_day((select v from tk where k='admin'), to_char(current_date,'YYYY-MM-DD'), '{"alm-01":{"status":"work","hrs":8}}','s-alm'))->>'changed'='1' then 'PASS admin Almaty gününü yazdı' else 'FAIL' end;
+select case when (select count(*) from days where date=to_char(current_date,'YYYY-MM-DD'))=2 then 'PASS aynı tarih iki şantiyede ayrı kayıt' else 'FAIL days pk' end;
+select case when ((mach_fetch((select v from tk where k='admin')))->'days' ? ('s-alm|'||to_char(current_date,'YYYY-MM-DD')))=true and ((mach_fetch((select v from tk where k='user')))->'days' ? ('s-alm|'||to_char(current_date,'YYYY-MM-DD')))=false then 'PASS gün anahtarı site|date; kullanıcı süzülür' else 'FAIL days key' end;
+select mach_upsert_person((select v from tk where k='admin'),(select id from people where email='bauyrzhan@test.kz'),'Бауыржан Беркынбай','bauyrzhan@test.kz','user',true,null,'["wb-astana","s-alm"]');
+select t_expect_err(format($$select mach_save_day(%L,%L,'{"alm-01":{"status":"idle"}}','s-alm')$$,(select v from tk where k='user'),to_char(current_date-6,'YYYY-MM-DD')), 'locked');
+select case when (mach_save_day((select v from tk where k='user'), to_char(current_date-4,'YYYY-MM-DD'), '{"alm-01":{"status":"idle"}}','s-alm'))->>'changed'='1' then 'PASS Almaty kilidi 5 gün (şantiyeye özel)' else 'FAIL per-site lock' end;
+select t_expect_err(format($$select mach_save_day(%L,%L,'{"dmp-01":{"status":"idle"}}')$$,(select v from tk where k='user'),to_char(current_date,'YYYY-MM-DD')), 'site_required');
+-- taşıma: admin doğrudan, kullanıcı taleple
+select t_expect_err(format($$select mach_move_machine(%L,'park-01','s-alm','2026-11-10','')$$,(select v from tk where k='user')), 'admin_required');
+select t_expect_err(format($$select mach_move_machine(%L,'park-01','yok','2026-11-10','')$$,(select v from tk where k='admin')), 'bad_site');
+select t_expect_err(format($$select mach_move_machine(%L,'park-01','','2026-11-10','')$$,(select v from tk where k='admin')), 'same_site');
+select mach_move_machine((select v from tk where k='admin'),'park-01','s-alm','2026-11-10','ilk sevk');
+select case when (select site from machines where id='park-01')='s-alm' and (select count(*) from machine_moves where machine_id='park-01' and from_site='' and to_site='s-alm' and by_person='p-huseyin')=1 then 'PASS taşıma uygulandı + günlük' else 'FAIL move' end;
+select mach_request_create((select v from tk where k='user'),'r6','machine_move','{"machineId":"park-01","toSite":"wb-astana","date":"2026-11-11","note":"lazım","site":"wb-astana"}','P-01 → Astana');
+select t_expect_err(format($$select mach_request_create(%L,'r7','machine_move','{"machineId":"park-01","toSite":"gizli","site":"wb-astana"}','x')$$,(select v from tk where k='user')), 'no_site_access');
+select mach_site_upsert((select v from tk where k='admin'),'s-gizli','Gizli',true,'{}');
+select t_expect_err(format($$select mach_request_create(%L,'r8','day_edit','{"date":"2026-11-01","rows":{},"site":"s-gizli"}','x')$$,(select v from tk where k='user')), 'no_site_access');
+select case when (select site from requests where id='r6')='wb-astana' and (select (data->'payload') ? 'site' from requests where id='r6')=false then 'PASS talep şantiyesi sütunda' else 'FAIL request site' end;
+select mach_decide((select v from tk where k='admin'),'r6',true);
+select case when (select site from machines where id='park-01')='wb-astana' and (select count(*) from machine_moves where machine_id='park-01')=2 then 'PASS taşıma talebi onayı → makine taşındı, günlük' else 'FAIL move request' end;
+select case when jsonb_array_length((mach_fetch((select v from tk where k='admin')))->'moves')=2 and jsonb_array_length((mach_fetch((select v from tk where k='user')))->'moves')=0 then 'PASS taşıma günlüğü yalnız admin' else 'FAIL moves' end;
+-- arıza: şantiye makineden türetilir, erişim denetimi
+select mach_incident_set((select v from tk where k='user'),'inc-alm','{"id":"inc-alm","date":"2026-11-10","machineId":"alm-01","type":"breakdown","open":true,"by":"x"}');
+select case when (select site from incidents where id='inc-alm')='s-alm' then 'PASS arıza şantiyesi makineden' else 'FAIL inc site' end;
+select mach_upsert_person((select v from tk where k='admin'),(select id from people where email='bauyrzhan@test.kz'),'Бауыржан Беркынбай','bauyrzhan@test.kz','user',true,null,'["wb-astana"]');
+select t_expect_err(format($$select mach_incident_set(%L,'inc-alm2','{"id":"inc-alm2","date":"2026-11-10","machineId":"alm-01","type":"breakdown","by":"x"}')$$,(select v from tk where k='user')), 'no_site_access');
+select case when ((mach_fetch((select v from tk where k='user')))->'incidents' ? 'inc-alm')=false then 'PASS kullanıcı başka şantiyenin arızasını görmez' else 'FAIL inc filter' end;
+-- şantiye pasifleştirme: makinesi varsa olmaz
+select t_expect_err(format($$select mach_site_upsert(%L,'s-alm','Wildberries Almaty',false,'{}')$$,(select v from tk where k='admin')), 'site_has_machines');
+select mach_site_upsert((select v from tk where k='admin'),'s-gizli','Gizli',false,'{}');
+select case when (select active from sites where id='s-gizli')=false then 'PASS boş şantiye pasif yapıldı' else 'FAIL' end;
+select t_expect_err(format($$select mach_move_machine(%L,'alm-01','s-gizli','2026-11-10','')$$,(select v from tk where k='admin')), 'bad_site');
+-- talep: ekip ekleme şantiyeye bağlanır
+select mach_request_create((select v from tk where k='user'),'r9','team_add','{"team":{"id":"t9","name":"Бригада 9"},"site":"wb-astana"}','Бригада 9');
+select mach_decide((select v from tk where k='admin'),'r9',true);
+select case when (select site from teams where id='t9')='wb-astana' and (select data ? 'site' from teams where id='t9')=false then 'PASS team_add onayı → şantiye sütunda' else 'FAIL team site' end;
 
 -- 9. oturumlar
 select case when jsonb_array_length(mach_sessions((select v from tk where k='admin'))) >= 3 then 'PASS oturum listesi' else 'FAIL sessions' end;
@@ -131,5 +186,7 @@ select t_expect_err(format($$select mach_fetch(%L)$$,(select v from tk where k='
 set role anon;
 select t_expect_err($$select * from machines$$, 'permission denied for table machines');
 select t_expect_err($$select * from pins$$, 'permission denied for table pins');
-select t_expect_err($$select mach_apply_day('2026-01-01','{}','x')$$, 'permission denied for function mach_apply_day');
+select t_expect_err($$select mach_apply_day('wb-astana','2026-01-01','{}','x')$$, 'permission denied for function mach_apply_day');
+select t_expect_err($$select mach_do_move('x','','2026-01-01','x','')$$, 'permission denied for function mach_do_move');
+select t_expect_err($$select * from sites$$, 'permission denied for table sites');
 reset role;

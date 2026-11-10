@@ -17,7 +17,7 @@ const {makeServer}=require('./mock_server');
   let html=fs.readFileSync(path.join(site,'index.html'),'utf8').replace(/function isoToday\(\)\{[^}]*\}/,`function isoToday(){return "${TODAY}"}`);fs.writeFileSync(path.join(site,'index.html'),html);
   async function open(opts={}){
     const ctx=await b.newContext({viewport:opts.mobile?{width:390,height:844}:{width:1300,height:900},acceptDownloads:true});const pg=await ctx.newPage();const errs=[];
-    pg.on('pageerror',e=>errs.push(e.message));pg.on('console',m=>{if(m.type()==='error'&&!/net::|TUNNEL|Failed to load resource|ServiceWorker|bad_login|duplicate key|last_admin|locked|read_only|admin_required|bad_old/.test(m.text()))errs.push('console: '+m.text());});
+    pg.on('pageerror',e=>errs.push(e.message));pg.on('console',m=>{if(m.type()==='error'&&!/net::|TUNNEL|Failed to load resource|ServiceWorker|bad_login|duplicate key|last_admin|locked|read_only|admin_required|bad_old|site_has_machines|same_site|no_site_access|site_required/.test(m.text()))errs.push('console: '+m.text());});
     await pg.route(/cdn\.jsdelivr\.net|fonts\.g/,r=>r.abort());
     await pg.exposeFunction('__rpc',(name,args)=>{try{return {data:server.call(name,args)};}catch(e){return {error:{message:e.message}};}});
     await pg.addInitScript(()=>{window.supabase={createClient:()=>({rpc:async(n,a)=>{const r=await window.__rpc(n,a);return r.error?{data:null,error:r.error}:{data:r.data,error:null};}})};});
@@ -48,11 +48,12 @@ const {makeServer}=require('./mock_server');
 
   /* B. kişiler yönetimi (Ayarlar sekmesi) */
   await A.pg.click('text=Справочники');await A.pg.waitForTimeout(300);
-  ok("B0 Tanımlar'da artık kullanıcı/ayar kartı yok",!(await vis(A.pg,'#pplForm'))&&!(await vis(A.pg,'#zonesTxt'))&&(await A.pg.locator('#ref .card').count())===4);
+  ok("B0 Tanımlar'da artık kullanıcı/ayar kartı yok",!(await vis(A.pg,'#pplForm'))&&!(await vis(A.pg,'#zonesTxt'))&&(await A.pg.locator('#ref .card').count())===5);
   await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);
   ok("B1 Ayarlar: kişiler formu admin'e görünür, e-posta + son giriş sütunu var",await vis(A.pg,'#pplForm')&&/huseyin.ozkan@/.test(await A.pg.textContent('#pplList'))&&/Последний вход/.test(await A.pg.textContent('#pplList')));
-  await A.pg.fill('#projInp','Wildberries Astana · Склад 2');await A.pg.click('#saveProj');await A.pg.waitForTimeout(300);
-  ok("B1b Proje adı ayardan değişti → başlıkta",server.S.settings.site.project==='Wildberries Astana · Склад 2'&&/Склад 2/.test(await A.pg.textContent('#hdrProj')));
+  await A.pg.locator('#sitesList tr').filter({hasText:'Wildberries Astana'}).locator('button').click();await A.pg.waitForTimeout(200);
+  await A.pg.fill('#frmFields [data-k=name]','Wildberries Astana · Склад 2');await A.pg.click('#frmOk');await A.pg.waitForTimeout(300);
+  ok("B1b Şantiye adı ayardan değişti → üst bar seçicide ve puantaj başlığında",server.S.sites['wb-astana'].name==='Wildberries Astana · Склад 2'&&/Склад 2/.test(await A.pg.textContent('#siteSel'))&&/Склад 2/.test(await A.pg.evaluate(()=>projectName())));
   await A.pg.click('#addPerson');await A.pg.waitForTimeout(200);
   ok("B2 Boş form → uyarı",/Заполните/.test(await A.pg.textContent('#toast')));
   await A.pg.fill('#pName','Бауыржан Беркынбай');await A.pg.fill('#pEmail','bauyrzhan@test.kz');await A.pg.selectOption('#pRole','user');await A.pg.fill('#pPass','Gecici123');await A.pg.click('#addPerson');await A.pg.waitForTimeout(400);
@@ -93,13 +94,13 @@ const {makeServer}=require('./mock_server');
   ok("C1 Kullanıcı girişi → zorunlu şifre penceresi",await vis(U.pg,'#mPw'));
   await U.pg.fill('#pwOld','Gecici123');await U.pg.fill('#pwNew','User12345');await U.pg.fill('#pwNew2','User12345');await U.pg.click('#pwSave');await U.pg.waitForTimeout(300);
   await U.pg.click('text=Настройки');await U.pg.waitForTimeout(300);
-  ok("C2 Kullanıcı: rozet Пользователь; Ayarlar'da yalnız Hesabım (kişiler/proje/bölge gizli)",/Пользователь/.test(await U.pg.textContent('#whoami'))&&await vis(U.pg,'#accCard')&&!(await vis(U.pg,'#pplForm'))&&!(await vis(U.pg,'#projInp'))&&/Бауыржан/.test(await U.pg.textContent('#accInfo')));
+  ok("C2 Kullanıcı: rozet Пользователь; Ayarlar'da yalnız Hesabım (kişiler/proje/bölge gizli)",/Пользователь/.test(await U.pg.textContent('#whoami'))&&await vis(U.pg,'#accCard')&&!(await vis(U.pg,'#pplForm'))&&!(await vis(U.pg,'#sitesList'))&&/Бауыржан/.test(await U.pg.textContent('#accInfo')));
   await U.pg.click('text=Журнал дня');await U.pg.waitForTimeout(300);
   const row=U.pg.locator('#entryTbl tr[data-id="dmp-03"]');await row.locator('[data-f=status]').selectOption('broken');await row.locator('[data-f=note]').fill('гидравлика');
   const locSel=row.locator('[data-f=loc]');ok("C2b Bölge yalnızca listeden seçilir (select), seçenekler = ayar listesi",(await locSel.evaluate(e=>e.tagName))==='SELECT'&&(await locSel.locator('option').count())>=5);
   await locSel.selectOption({index:1});
   await U.pg.click('#saveDay');await U.pg.waitForTimeout(300);if(await vis(U.pg,'#modal'))await U.pg.click('#modalYes');await U.pg.waitForTimeout(600);
-  const d10=server.S.days[TODAY];
+  const d10=server.S.days["wb-astana|"+TODAY];
   ok("C3 10.11 kaydı oluştu (ilk kayıt, 48 satır, saved_by kullanıcı)",!!d10&&Object.keys(d10.rec).length===48&&d10.history.length===1&&d10.history[0].first===true&&d10.saved_by!=="p-huseyin");
   ok("C4 Д-03 broken + not + serbest bölge",d10.rec["dmp-03"].status==="broken"&&d10.rec["dmp-03"].note==="гидравлика"&&d10.rec["dmp-03"].loc==="Склад N1");
   ok("C5 Toast: Сохранено · N работает",/Сохранено · \d+/.test(await U.pg.textContent('#toast')),await U.pg.textContent('#toast'));
@@ -107,7 +108,7 @@ const {makeServer}=require('./mock_server');
   await A.pg.evaluate(()=>loadAll());await A.pg.waitForTimeout(300);await A.pg.click('text=Журнал дня');await A.pg.waitForTimeout(300);
   await A.pg.locator('#entryTbl tr[data-id="dmp-01"] [data-f=status]').selectOption('maint');await A.pg.click('#saveDay');await A.pg.waitForTimeout(300);if(await vis(A.pg,'#modal'))await A.pg.click('#modalYes');await A.pg.waitForTimeout(500);
   await row.locator('[data-f=note]').fill('гидравлика течёт');await U.pg.click('#saveDay');await U.pg.waitForTimeout(300);if(await vis(U.pg,'#modal'))await U.pg.click('#modalYes');await U.pg.waitForTimeout(600);
-  const d10b=server.S.days[TODAY];
+  const d10b=server.S.days["wb-astana|"+TODAY];
   ok("C6 Eşzamanlı: admin'in Д-01 ТО kaydı korundu, kullanıcının Д-03 notu güncellendi",d10b.rec["dmp-01"].status==="maint"&&d10b.rec["dmp-03"].note==="гидравлика течёт");
   ok("C7 Geçmiş: 3 kayıt, sonuncusu 1 satır / alan 'note' a→b",d10b.history.length===3&&d10b.history[2].n===1&&d10b.history[2].ch[0].f==="note"&&d10b.history[2].ch[0].a==="гидравлика"&&d10b.history[2].ch[0].b==="гидравлика течёт",JSON.stringify(d10b.history[2]));
   await U.pg.click('text=Пуантаж');await U.pg.waitForTimeout(300);await U.pg.evaluate(()=>{puanDate=isoToday();document.getElementById("puanDate").value=puanDate;renderPuan();});await U.pg.waitForTimeout(300);
@@ -120,11 +121,11 @@ const {makeServer}=require('./mock_server');
   ok("D1 Kilitli gün uyarısı görünür",await vis(U.pg,'#lockNote'));
   await U.pg.locator('#entryTbl tr[data-id="dmp-05"] [data-f=status]').selectOption('absent');await U.pg.click('#saveDay');await U.pg.waitForTimeout(300);if(await vis(U.pg,'#modal'))await U.pg.click('#modalYes');await U.pg.waitForTimeout(500);
   const rq=Object.values(server.S.requests);
-  ok("D2 Kilitli gün → day_edit talebi, gün değişmedi",rq.length===1&&rq[0].type==="day_edit"&&server.S.days["2026-11-01"].rec["dmp-05"].status!=="absent");
+  ok("D2 Kilitli gün → day_edit talebi, gün değişmedi",rq.length===1&&rq[0].type==="day_edit"&&server.S.days["wb-astana|2026-11-01"].rec["dmp-05"].status!=="absent");
   await A.pg.evaluate(()=>loadAll());await A.pg.waitForTimeout(300);await A.pg.click('text=Запросы');await A.pg.waitForTimeout(300);
   ok("D3 Admin talebi görüyor (rozet 1)",(await A.pg.textContent('#reqBadge')).trim()==="1"&&/Д-05/.test(await A.pg.textContent('#reqBody')));
   await A.pg.locator('#reqBody button').filter({hasText:/Подтвердить/}).first().click();await A.pg.waitForTimeout(600);
-  const d01=server.S.days["2026-11-01"];
+  const d01=server.S.days["wb-astana|2026-11-01"];
   ok("D4 Onay → sunucuda uygulandı, geçmişte requestedBy",d01.rec["dmp-05"].status==="absent"&&d01.history[d01.history.length-1].requestedBy!=="p-huseyin"&&d01.history[d01.history.length-1].by==="p-huseyin"&&rq[0].status==="approved");
 
   /* D2. arıza düzenleme (admin) */
@@ -172,6 +173,69 @@ const {makeServer}=require('./mock_server');
   ok("H2 Telefonda üst bar taşmıyor",hb[1]<=390,JSON.stringify(hb));
   ok("H3 Mobil oturum hatasız",M.errs.length===0,M.errs.join("|"));
   await A.pg.screenshot({path:path.join(ROOT,'tests','shot-login.png')});
+
+  /* S. ÇOKLU ŞANTİYE */
+  await login(A.pg,'huseyin.ozkan@asys-machinery.com','Admin12345');await A.pg.waitForTimeout(400);
+  await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);
+  ok("S0 Tek şantiye: seçici tek seçenekli, Makine Parkı 0",(await A.pg.locator('#siteSel option').count())===1&&/0 в парке/.test(await A.pg.textContent('#parkNote')));
+  await A.pg.fill('#siteNewName','Wildberries Almaty');await A.pg.click('#addSite');await A.pg.waitForTimeout(400);
+  const almId=Object.keys(server.S.sites).find(k=>k!=='wb-astana');
+  ok("S1 Şantiye eklendi; seçicide 2 şantiye + «Все объекты»",!!almId&&(await A.pg.locator('#siteSel option').count())===3&&/Все объекты/.test(await A.pg.textContent('#siteSel')));
+  ok("S1b Kullanıcı tablosunda şantiye kutuları (Бауыржан: Astana işaretli, Almaty değil)",(await A.pg.locator('#pplList tr').filter({hasText:'Бауыржан'}).locator('input[type=checkbox]:checked').count())===2);
+  // Almaty'ye geç: boş şantiye
+  await A.pg.selectOption('#siteSel',almId);await A.pg.waitForTimeout(400);
+  ok("S2 Almaty seçildi: makine yok, bölge/kilit kartı Almaty'yi gösteriyor",Object.keys(await A.pg.evaluate(()=>machines)).length===0&&/Wildberries Almaty/.test(await A.pg.textContent('#set .siteName'))&&(await A.pg.evaluate(()=>projectName()))==='Wildberries Almaty');
+  await A.pg.fill('#zonesTxt','Блок A\nБлок B');await A.pg.click('#saveZones');await A.pg.waitForTimeout(300);
+  ok("S3 Bölgeler şantiyeye kaydedildi (Astana etkilenmedi)",JSON.stringify(server.S.sites[almId].data.zones)==='["Блок A","Блок B"]'&&!(server.S.sites['wb-astana'].data.zones||[]).length);
+  // makine taşı: Astana → Almaty (admin doğrudan)
+  await A.pg.click('text=Справочники');await A.pg.waitForTimeout(300);
+  ok("S4 Tanımlar: admin tüm parkı görür (48), Konum sütunu var",(await A.pg.locator('#refMach tr').count())===49&&/Объект/.test(await A.pg.textContent('#refMach')));
+  await A.pg.locator('#refMach tr').filter({hasText:'Д-01'}).locator('button').filter({hasText:'Переместить'}).click();await A.pg.waitForTimeout(200);
+  ok("S5 Taşıma formu açıldı",await vis(A.pg,'#mForm')&&/Д-01/.test(await A.pg.textContent('#frmTitle')));
+  await A.pg.selectOption('#frmFields [data-k=toSite]',almId);await A.pg.fill('#frmFields [data-k=note]','кран нужен');await A.pg.click('#frmOk');await A.pg.waitForTimeout(400);
+  ok("S6 Д-01 Almaty'ye taşındı, günlükte kayıt",server.S.machines['dmp-01'].site===almId&&server.S.moves.length===1&&server.S.moves[0].note==='кран нужен'&&/Переместить/.test(await A.pg.textContent('#movesBox'))===false&&/Д-01/.test(await A.pg.textContent('#movesList')));
+  ok("S7 Almaty görünümünde 1 makine",Object.keys(await A.pg.evaluate(()=>machines)).length===1);
+  // Almaty'de gün kaydı
+  await A.pg.click('text=Журнал дня');await A.pg.waitForTimeout(400);
+  ok("S8 Almaty günlük kayıt: 1 satır, bölge listesi Almaty'nin",(await A.pg.locator('#entryTbl tr[data-id]').count())===1&&/Блок A/.test(await A.pg.textContent('#entryTbl')));
+  const astanaBefore=JSON.stringify(server.S.days['wb-astana|'+TODAY]);
+  await A.pg.locator('#entryTbl tr[data-id="dmp-01"] [data-f=status]').selectOption('idle');await A.pg.click('#saveDay');await A.pg.waitForTimeout(300);if(await vis(A.pg,'#modal'))await A.pg.click('#modalYes');await A.pg.waitForTimeout(600);
+  ok("S9 Kayıt Almaty anahtarına yazıldı; Astana'nın bugünü etkilenmedi",!!server.S.days[almId+'|'+TODAY]&&server.S.days[almId+'|'+TODAY].rec['dmp-01'].status==='idle'&&Object.keys(server.S.days[almId+'|'+TODAY].rec).length===1&&JSON.stringify(server.S.days['wb-astana|'+TODAY])===astanaBefore);
+  // Tüm şantiyeler görünümü
+  await A.pg.selectOption('#siteSel','*');await A.pg.waitForTimeout(400);
+  ok("S10 «Все объекты»: 48 makine, günlük kayıt kapalı, bugün birleşik",Object.keys(await A.pg.evaluate(()=>machines)).length===48&&(await A.pg.locator('#entryTbl tr[data-id]').count())===0&&(await A.pg.isDisabled('#saveDay'))&&/Все объекты/.test(await A.pg.textContent('#roNote')));
+  await A.pg.click('text=Сегодня');await A.pg.waitForTimeout(200);
+  ok("S10b Bugün (tüm park): Almaty'deki Д-01 dahil 48 kayıt",(await A.pg.evaluate(()=>Object.keys(days[isoToday()]?.rec||{}).length))===48);
+  // kullanıcı: yalnız Astana'yı görür; Almaty'deki makineyi görmez; park makinesini görür ve talep eder
+  server.S.machines['dmp-02'].site='';
+  const U2=await open();await login(U2.pg,'bauyrzhan@test.kz','User12345');await U2.pg.waitForTimeout(500);
+  ok("S11 Kullanıcı: seçici yalnız Astana (1 seçenek, «Все объекты» yok), 46 makine",(await U2.pg.locator('#siteSel option').count())===1&&!/Все объекты/.test(await U2.pg.textContent('#siteSel'))&&Object.keys(await U2.pg.evaluate(()=>machines)).length===46);
+  await U2.pg.click('text=Справочники');await U2.pg.waitForTimeout(300);
+  const refTxt=await U2.pg.textContent('#refMach');
+  ok("S12 Tanımlar (kullanıcı): Astana makineleri + parktaki Д-02 görünür, Almaty'deki Д-01 görünmez",/Д-02/.test(refTxt)&&!/Д-01/.test(refTxt)&&/Парк техники/.test(refTxt));
+  await U2.pg.locator('#refMach tr').filter({hasText:'Д-02'}).locator('button').filter({hasText:'Переместить'}).click();await U2.pg.waitForTimeout(200);
+  ok("S13 Kullanıcı taşıma formu: hedef yalnız kendi şantiyesi",(await U2.pg.locator('#frmFields [data-k=toSite] option').count())===1);
+  await U2.pg.click('#frmOk');await U2.pg.waitForTimeout(400);
+  const mvReq=Object.values(server.S.requests).find(r=>r.type==='machine_move');
+  ok("S14 Taşıma talebi oluştu (pending, site=Astana), makine henüz parkta",!!mvReq&&mvReq.status==='pending'&&mvReq.site==='wb-astana'&&server.S.machines['dmp-02'].site==='');
+  // admin onaylar
+  await A.pg.evaluate(()=>loadAll());await A.pg.waitForTimeout(400);await A.pg.click('text=Запросы');await A.pg.waitForTimeout(500);
+  ok("S15 Talep kartında makine, nereden → nereye",/Д-02/.test(await A.pg.textContent('#reqBody'))&&/Парк техники/.test(await A.pg.textContent('#reqBody'))&&/Wildberries Astana/.test(await A.pg.textContent('#reqBody')));
+  await A.pg.locator('#reqBody .card.pending').filter({hasText:'Д-02'}).locator('button').filter({hasText:'Подтвердить'}).click();await A.pg.waitForTimeout(500);
+  ok("S16 Onay → Д-02 Astana'ya taşındı, günlük 2 kayıt",server.S.machines['dmp-02'].site==='wb-astana'&&server.S.moves.length===2);
+  // kullanıcıya Almaty yetkisi ver → seçici 2 seçenek
+  await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);
+  await A.pg.locator('#pplList tr').filter({hasText:'Бауыржан'}).locator('label').filter({hasText:'Almaty'}).locator('input').check();await A.pg.waitForTimeout(400);
+  ok("S17 Kullanıcıya Almaty yetkisi verildi",JSON.stringify(Object.values(server.S.people).find(p=>p.email==='bauyrzhan@test.kz').sites.sort())==='["'+[almId,'wb-astana'].sort().join('","')+'"]');
+  await U2.pg.waitForTimeout(100);await U2.pg.evaluate(()=>loadAll());await U2.pg.waitForTimeout(400);
+  ok("S18 Kullanıcı seçicisinde artık 2 şantiye («Все объекты» yok)",(await U2.pg.locator('#siteSel option').count())===2&&!/Все объекты/.test(await U2.pg.textContent('#siteSel')));
+  // makinesi olan şantiye pasif yapılamaz
+  await A.pg.locator('#sitesList tr').filter({hasText:'Almaty'}).locator('button').click();await A.pg.waitForTimeout(200);await A.pg.selectOption('#frmFields [data-k=active]','0');await A.pg.click('#frmOk');await A.pg.waitForTimeout(300);
+  ok("S19 Makinesi olan şantiye pasif yapılamaz → uyarı",/переместите/.test(await A.pg.textContent('#toast'))&&server.S.sites[almId].active===true);
+  ok("S20 Çoklu şantiye akışında sayfa hatası yok",A.errs.length===0&&U2.errs.length===0,(A.errs.concat(U2.errs)).slice(0,3).join("|"));
+  await A.pg.selectOption('#siteSel','*');await A.pg.waitForTimeout(300);await A.pg.click('text=Справочники');await A.pg.waitForTimeout(300);await A.pg.screenshot({path:path.join(ROOT,'tests','shot-sites-ref.png'),fullPage:false});
+  await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);await A.pg.screenshot({path:path.join(ROOT,'tests','shot-sites-set.png')});
+  await U2.ctx.close();
   await b.close();fs.rmSync(site,{recursive:true,force:true});
   console.log(`\n${pass} PASS / ${fail} FAIL`);process.exit(fail?1:0);
 })().catch(e=>{console.error("HARNESS",e);process.exit(1)});
