@@ -1092,7 +1092,7 @@ function renderSettings(){
   document.querySelectorAll("#set .siteName").forEach(e=>e.textContent=SITE==="*"?t("site_required"):siteName(SITE));
   ["zonesTxt","saveZones","lockDaysInp","saveLock"].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=!isAdmin||SITE==="*";});
   renderSites();
-  const hp=document.getElementById("hdrProj");if(hp)hp.textContent=projectName();const pp=document.getElementById("puanProj");if(pp)pp.textContent=projectName();
+const pp=document.getElementById("puanProj");if(pp)pp.textContent=projectName();
   renderPeople();
 }
 function askForm(title,fields){return new Promise(res=>{const m=document.getElementById("mForm");document.getElementById("frmTitle").textContent=title;document.getElementById("frmErr").textContent="";
@@ -1132,8 +1132,9 @@ function renderPeople(){
       const act=isAdmin?`<input type="checkbox" ${p.active?"checked":""} onchange="setPersonActive('${esc(p.id)}',this.checked)" style="min-height:auto;width:18px;height:18px">`:(p.active?"✓":"—");
       return `<tr><td>${isAdmin?`<a href="#" onclick="editPersonName('${esc(p.id)}');return false" title="${t("ppl_edit_name")}"><b>${esc(p.name)}</b></a>`:`<b>${esc(p.name)}</b>`}${me?` <span class="muted">(${t("you")})</span>`:""}</td>${isAdmin?`<td class="muted"><a href="#" onclick="editPersonEmail('${esc(p.id)}');return false" title="${t("ppl_edit_email")}">${esc(p.email||"—")}</a></td>`:""}<td>${role}</td>${isAdmin?`<td style="white-space:nowrap">${p.role==="admin"?`<span class="muted">${t("all_sites")}</span>`:`<button class="btn ghost sm" onclick="editPersonSites('${esc(p.id)}')" title="${esc(sitesSummary(p.sites,true))}">${esc(sitesSummary(p.sites))} ✎</button>`}</td>`:""}<td>${act}</td>${isAdmin?`<td class="muted">${p.lastLogin?fmtDT(p.lastLogin):t("never")}</td><td class="row" style="gap:4px"><button class="btn sm ghost" onclick="resetPersonPw('${esc(p.id)}')">${t("ppl_reset")}</button>${me?"":`<button class="btn sm ghost" onclick="deletePerson('${esc(p.id)}')" title="${t("ppl_delete")}">✕</button>`}</td>`:""}</tr>`;}).join("")+`</table></div>`;
   const ps=document.getElementById("pSites");if(ps&&isAdmin){const ids=activeSites().map(x=>x.id).join(",");const cur=(newPersonSites??(sites[SITE]?[SITE]:[])).filter(x=>sites[x]&&sites[x].active!==false);ps.dataset.sel=JSON.stringify(cur);ps.innerHTML=`<button type="button" class="btn ghost sm" onclick="pickNewPersonSites()" title="${esc(sitesSummary(cur,true))}">${esc(sitesSummary(cur))} ✎</button>`;}
-  if(isAdmin)renderSessions();
+  if(isAdmin&&document.getElementById("sessList")?.closest("details")?.open&&document.getElementById("set").classList.contains("on"))renderSessions();
 }
+document.getElementById("sessList").closest("details").addEventListener("toggle",e=>{if(e.target.open&&isAdmin)renderSessions();});
 function sitesSummary(ids,full){const l=activeSites().filter(x=>(ids||[]).includes(x.id)).map(x=>x.name);if(!l.length)return t("sites_none");if(full||l.length<=2)return l.join(", ");return l.length+" "+t("sites_n");}
 function pickSites(title,selected){return new Promise(res=>{const m=document.getElementById("mForm");document.getElementById("frmTitle").textContent=title;document.getElementById("frmErr").textContent="";
   const box=document.getElementById("frmFields");const sel=new Set(selected||[]);

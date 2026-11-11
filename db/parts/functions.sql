@@ -385,5 +385,18 @@ grant execute on function
   mach_upsert_person(text,text,text,text,text,boolean,text,jsonb), mach_upsert_person(text,text,text,text,text,boolean,text), mach_sessions(text), mach_revoke_person(text,text), mach_delete_person(text,text)
   to anon, authenticated;
 
+-- ---------- sertleştirme ----------
+-- SECURITY DEFINER fonksiyonlarda search_path sabitlenir (Supabase güvenlik danışmanı: function_search_path_mutable).
+-- pgcrypto Supabase'de "extensions" şemasındadır; yerelde public'te → ikisi de listede.
+do $$
+declare f record;
+begin
+  for f in select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where (n.nspname = 'public' and p.proname like 'mach\_%') or n.nspname = 'asys' loop
+    execute format('alter function %s set search_path = public, extensions', f.sig);
+  end loop;
+end $$;
+create index if not exists sessions_person_idx on sessions (person_id);
+
 -- PostgREST API önbelleğini yenile (yeni/değişen fonksiyonlar hemen görünsün)
 notify pgrst, 'reload schema';
