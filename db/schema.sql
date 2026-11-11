@@ -473,6 +473,9 @@ grant execute on function
 revoke execute on function mach_require(text,boolean,boolean), mach_lock_days(text), mach_sites_of(people), mach_site_ok(people,text), mach_default_site(people),
   mach_apply_day(text,text,jsonb,text,text), mach_do_move(text,text,text,text,text) from anon, authenticated, public;
 
+-- PostgREST API önbelleğini yenile (yeni/değişen fonksiyonlar hemen görünsün)
+notify pgrst, 'reload schema';
+
 -- ---------- başlangıç ----------
 insert into settings(key, value) values ('site', '{"project":"Wildberries Astana","lockDays":3,"zones":[]}'::jsonb) on conflict (key) do nothing;
 insert into sites(id, name, active, data) values ('wb-astana', 'Wildberries Astana', true, '{"lockDays":3,"zones":[]}'::jsonb) on conflict (id) do nothing;
