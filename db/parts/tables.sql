@@ -15,6 +15,7 @@ create table if not exists sites (
   name        text not null,
   active      boolean not null default true,
   data        jsonb not null default '{}'::jsonb,   -- {zones:[...], lockDays:n}
+  deleted_at  timestamptz,                          -- silinen (boş) şantiye: kayıt kalır, listelerde görünmez
   created_at  timestamptz not null default now()
 );
 

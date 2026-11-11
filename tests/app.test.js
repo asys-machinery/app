@@ -232,6 +232,14 @@ const {makeServer}=require('./mock_server');
   // makinesi olan şantiye pasif yapılamaz
   await A.pg.locator('#sitesList tr').filter({hasText:'Almaty'}).locator('button').click();await A.pg.waitForTimeout(200);await A.pg.selectOption('#frmFields [data-k=active]','0');await A.pg.click('#frmOk');await A.pg.waitForTimeout(300);
   ok("S19 Makinesi olan şantiye pasif yapılamaz → uyarı",/переместите/.test(await A.pg.textContent('#toast'))&&server.S.sites[almId].active===true);
+  // şantiye silme: verisi olanda düğme yok; boş şantiye onayla silinir
+  await A.pg.fill('#siteNewName','Geçici Şantiye');await A.pg.click('#addSite');await A.pg.waitForTimeout(400);
+  const tmpId=Object.keys(server.S.sites).find(k=>server.S.sites[k].name==='Geçici Şantiye');
+  ok("S19b Verisi olan şantiyede Sil düğmesi yok, boş şantiyede var",(await A.pg.locator('#sitesList tr').filter({hasText:'Wildberries Almaty'}).locator('button').filter({hasText:'Удалить'}).count())===0&&(await A.pg.locator('#sitesList tr').filter({hasText:'Geçici Şantiye'}).locator('button').filter({hasText:'Удалить'}).count())===1);
+  await A.pg.locator('#sitesList tr').filter({hasText:'Geçici Şantiye'}).locator('button').filter({hasText:'Удалить'}).click();await A.pg.waitForTimeout(200);
+  ok("S19c Silme onayı soruldu",await vis(A.pg,'#modal')&&/Geçici Şantiye/.test(await A.pg.textContent('#modalMsg')));
+  await A.pg.click('#modalYes');await A.pg.waitForTimeout(400);
+  ok("S19d Boş şantiye silindi, listeden ve seçiciden düştü",!server.S.sites[tmpId]&&!/Geçici Şantiye/.test(await A.pg.textContent('#sitesList'))&&!/Geçici Şantiye/.test(await A.pg.textContent('#siteSel')));
   ok("S20 Çoklu şantiye akışında sayfa hatası yok",A.errs.length===0&&U2.errs.length===0,(A.errs.concat(U2.errs)).slice(0,3).join("|"));
   await A.pg.selectOption('#siteSel','*');await A.pg.waitForTimeout(300);await A.pg.click('text=Справочники');await A.pg.waitForTimeout(300);await A.pg.screenshot({path:path.join(ROOT,'tests','shot-sites-ref.png'),fullPage:false});
   await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);await A.pg.screenshot({path:path.join(ROOT,'tests','shot-sites-set.png')});

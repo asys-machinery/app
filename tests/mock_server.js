@@ -46,6 +46,9 @@ function makeServer(){
     mach_site_upsert:({p_token,p_id,p_name,p_active,p_data})=>{req(p_token,true);if(!String(p_name||"").trim())err("name_required");const id=p_id||("s"+crypto.randomBytes(4).toString("hex"));
       if(p_active===false&&Object.values(S.machines).some(m=>m.site===id&&m.active!==false))err("site_has_machines");
       S.sites[id]={id,name:p_name.trim(),active:p_active!==false,data:p_data||{}};return S.sites[id];},
+    mach_site_delete:({p_token,p_id})=>{req(p_token,true);if(!S.sites[p_id])err("bad_site");if(Object.values(S.machines).some(m=>m.site===p_id))err("site_has_machines");
+      if(Object.values(S.teams).some(x=>x.site===p_id)||Object.values(S.operators).some(x=>x.site===p_id)||Object.values(S.days).some(d=>d.site===p_id)||Object.values(S.incidents).some(i=>i.site===p_id)||Object.values(S.requests).some(r=>r.site===p_id)||S.moves.some(m=>m.from===p_id||m.to===p_id))err("site_has_records");
+      for(const pp of Object.values(S.people))pp.sites=(pp.sites||[]).filter(x=>x!==p_id);delete S.sites[p_id];return null;},
     mach_move_machine:({p_token,p_machine,p_to_site,p_date,p_note})=>{const p=req(p_token,true);doMove(p_machine,p_to_site||"",p_date||TODAY,p.id,p_note);return null;},
     mach_incident_set:({p_token,p_id,p_data})=>{const p=req(p_token,false,true);const st=p_data.site||S.machines[p_data.machineId]?.site||S.incidents[p_id]?.site||defSite(p)||"";if(!siteOk(p,st))err("no_site_access");S.incidents[p_id]={...strip(p_data),site:st};return null;},
     mach_incident_delete:({p_token,p_id})=>{req(p_token,true);delete S.incidents[p_id];return null;},

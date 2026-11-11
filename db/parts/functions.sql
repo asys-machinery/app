@@ -19,7 +19,7 @@ end $$;
 
 -- kişinin görebildiği şantiyeler (admin: hepsi)
 create or replace function asys.sites_of(p people) returns text[] language sql security definer stable as $$
-  select case when p.role = 'admin' then coalesce((select array_agg(id) from sites), '{}'::text[])
+  select case when p.role = 'admin' then coalesce((select array_agg(id) from sites where deleted_at is null), '{}'::text[])
               else coalesce((select array_agg(x) from jsonb_array_elements_text(coalesce(p.sites,'[]'::jsonb)) x), '{}'::text[]) end;
 $$;
 create or replace function asys.site_ok(p people, p_site text) returns boolean language sql security definer stable as $$
@@ -82,7 +82,7 @@ begin
   adm := p.role = 'admin'; al := asys.sites_of(p);
   return jsonb_build_object(
     'me', jsonb_build_object('person', p.id, 'name', p.name, 'role', p.role, 'mustChange', coalesce(mc,false), 'sites', coalesce(p.sites,'[]'::jsonb)),
-    'sites', coalesce((select jsonb_object_agg(id, jsonb_build_object('id',id,'name',name,'active',active,'data',data)) from sites), '{}'::jsonb),
+    'sites', coalesce((select jsonb_object_agg(id, jsonb_build_object('id',id,'name',name,'active',active,'data',data)) from sites where deleted_at is null), '{}'::jsonb),
     'people', coalesce((select jsonb_agg(jsonb_build_object('id',id,'name',name,'role',role,'active',active,
                  'email', case when adm then email else null end,
                  'lastLogin', case when adm then last_login else null end,
@@ -141,7 +141,7 @@ begin
   if p_date !~ '^\d{4}-\d{2}-\d{2}$' then raise exception 'bad_date'; end if;
   st := coalesce(nullif(p_site,''), asys.default_site(p));
   if st is null or st = '' then raise exception 'site_required'; end if;
-  if not exists (select 1 from sites where id = st) then raise exception 'bad_site'; end if;
+  if not exists (select 1 from sites where id = st and deleted_at is null) then raise exception 'bad_site'; end if;
   if not asys.site_ok(p, st) then raise exception 'no_site_access'; end if;
   if p.role <> 'admin' and p_date::date < (current_date - asys.lock_days(st)) then raise exception 'locked'; end if;
   return asys.apply_day(st, p_date, p_rows, p.id, null);
@@ -193,6 +193,22 @@ begin
     on conflict (id) do update set name = excluded.name, active = excluded.active, data = excluded.data
     returning * into r;
   return jsonb_build_object('id', r.id, 'name', r.name, 'active', r.active, 'data', r.data);
+end $$;
+
+-- şantiye silme: yalnızca hiç verisi olmayan şantiye (makine/ekip/operatör/gün/arıza/talep/taşıma yok). Verisi olan pasif yapılır.
+create or replace function mach_site_delete(p_token text, p_id text)
+returns void language plpgsql security definer as $$
+declare p people;
+begin
+  p := asys.require(p_token, true);
+  if not exists (select 1 from sites where id = p_id and deleted_at is null) then raise exception 'bad_site'; end if;
+  if exists (select 1 from machines where site = p_id) then raise exception 'site_has_machines'; end if;
+  if exists (select 1 from teams where site = p_id) or exists (select 1 from operators where site = p_id)
+     or exists (select 1 from days where site = p_id) or exists (select 1 from incidents where site = p_id)
+     or exists (select 1 from requests where site = p_id)
+     or exists (select 1 from machine_moves where from_site = p_id or to_site = p_id) then raise exception 'site_has_records'; end if;
+  update people set sites = coalesce((select jsonb_agg(x) from jsonb_array_elements_text(sites) x where x <> p_id), '[]'::jsonb) where sites ? p_id;
+  update sites set active = false, deleted_at = now() where id = p_id;   -- kayıt tutulur (iz kalır), listelerde görünmez
 end $$;
 
 -- makine taşıma (iç): günlüğe yazar, makinenin şantiyesini değiştirir
@@ -363,7 +379,7 @@ end $$;
 grant execute on function
   mach_login(text,text), mach_logout(text), mach_change_password(text,text,text), mach_fetch(text,text),
   mach_save_day(text,text,jsonb,text), mach_save_day(text,text,jsonb), mach_ref_upsert(text,text,text,jsonb), mach_set_setting(text,text,jsonb),
-  mach_site_upsert(text,text,text,boolean,jsonb), mach_move_machine(text,text,text,text,text),
+  mach_site_upsert(text,text,text,boolean,jsonb), mach_site_delete(text,text), mach_move_machine(text,text,text,text,text),
   mach_incident_set(text,text,jsonb), mach_incident_delete(text,text),
   mach_request_create(text,text,text,jsonb,text), mach_decide(text,text,boolean),
   mach_upsert_person(text,text,text,text,text,boolean,text,jsonb), mach_upsert_person(text,text,text,text,text,boolean,text), mach_sessions(text), mach_revoke_person(text,text), mach_delete_person(text,text)

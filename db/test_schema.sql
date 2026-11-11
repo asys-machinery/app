@@ -159,6 +159,17 @@ select case when ((mach_fetch((select v from tk where k='user')))->'incidents' ?
 select t_expect_err(format($$select mach_site_upsert(%L,'s-alm','Wildberries Almaty',false,'{}')$$,(select v from tk where k='admin')), 'site_has_machines');
 select mach_site_upsert((select v from tk where k='admin'),'s-gizli','Gizli',false,'{}');
 select case when (select active from sites where id='s-gizli')=false then 'PASS boş şantiye pasif yapıldı' else 'FAIL' end;
+select t_expect_err(format($$select mach_site_delete(%L,'s-gizli')$$,(select v from tk where k='user')), 'admin_required');
+select t_expect_err(format($$select mach_site_delete(%L,'s-alm')$$,(select v from tk where k='admin')), 'site_has_machines');
+select t_expect_err(format($$select mach_site_delete(%L,'yok')$$,(select v from tk where k='admin')), 'bad_site');
+select mach_site_upsert((select v from tk where k='admin'),'s-tmp','Geçici',true,'{}');
+select mach_upsert_person((select v from tk where k='admin'),'p-view','Gözlemci','viewer@test.kz','viewer',true,null,'["wb-astana","s-tmp"]');
+select mach_site_delete((select v from tk where k='admin'),'s-tmp');
+select case when (select deleted_at is not null from sites where id='s-tmp') and not ((mach_fetch((select v from tk where k='admin')))->'sites' ? 's-tmp') and (select sites from people where id='p-view')='["wb-astana"]'::jsonb then 'PASS boş şantiye silindi, kullanıcı yetkisinden düştü' else 'FAIL site delete' end;
+select mach_site_upsert((select v from tk where k='admin'),'s-tmp2','Geçici2',true,'{}');
+select mach_move_machine((select v from tk where k='admin'),'alm-01','s-tmp2','2026-11-10','');
+select mach_move_machine((select v from tk where k='admin'),'alm-01','s-alm','2026-11-10','');
+select t_expect_err(format($$select mach_site_delete(%L,'s-tmp2')$$,(select v from tk where k='admin')), 'site_has_records');
 select t_expect_err(format($$select mach_move_machine(%L,'alm-01','s-gizli','2026-11-10','')$$,(select v from tk where k='admin')), 'bad_site');
 -- talep: ekip ekleme şantiyeye bağlanır
 select mach_request_create((select v from tk where k='user'),'r9','team_add','{"team":{"id":"t9","name":"Бригада 9"},"site":"wb-astana"}','Бригада 9');

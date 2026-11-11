@@ -51,3 +51,6 @@ update incidents set site = 'wb-astana' where site = '';
 update requests  set site = 'wb-astana' where site = '';
 update people    set sites = '["wb-astana"]'::jsonb where role <> 'admin' and sites = '[]'::jsonb;
 
+
+-- 005: şantiye silme (iz bırakarak)
+alter table sites add column if not exists deleted_at timestamptz;
