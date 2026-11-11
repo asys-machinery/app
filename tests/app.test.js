@@ -181,7 +181,7 @@ const {makeServer}=require('./mock_server');
   await A.pg.fill('#siteNewName','Wildberries Almaty');await A.pg.click('#addSite');await A.pg.waitForTimeout(400);
   const almId=Object.keys(server.S.sites).find(k=>k!=='wb-astana');
   ok("S1 Şantiye eklendi; seçicide 2 şantiye + «Все объекты»",!!almId&&(await A.pg.locator('#siteSel option').count())===3&&/Все объекты/.test(await A.pg.textContent('#siteSel')));
-  ok("S1b Kullanıcı tablosunda şantiye kutuları (Бауыржан: Astana işaretli, Almaty değil)",(await A.pg.locator('#pplList tr').filter({hasText:'Бауыржан'}).locator('input[type=checkbox]:checked').count())===2);
+  ok("S1b Kullanıcı satırında şantiye özeti düğmesi (Бауыржан: Astana)",/Wildberries Astana/.test(await A.pg.locator('#pplList tr').filter({hasText:'Бауыржан'}).locator('button').filter({hasText:'✎'}).textContent()));
   // Almaty'ye geç: boş şantiye
   await A.pg.selectOption('#siteSel',almId);await A.pg.waitForTimeout(400);
   ok("S2 Almaty seçildi: makine yok, bölge/kilit kartı Almaty'yi gösteriyor",Object.keys(await A.pg.evaluate(()=>machines)).length===0&&/Wildberries Almaty/.test(await A.pg.textContent('#set .siteName'))&&(await A.pg.evaluate(()=>projectName()))==='Wildberries Almaty');
@@ -225,7 +225,9 @@ const {makeServer}=require('./mock_server');
   ok("S16 Onay → Д-02 Astana'ya taşındı, günlük 2 kayıt",server.S.machines['dmp-02'].site==='wb-astana'&&server.S.moves.length===2);
   // kullanıcıya Almaty yetkisi ver → seçici 2 seçenek
   await A.pg.click('text=Настройки');await A.pg.waitForTimeout(300);
-  await A.pg.locator('#pplList tr').filter({hasText:'Бауыржан'}).locator('label').filter({hasText:'Almaty'}).locator('input').check();await A.pg.waitForTimeout(400);
+  await A.pg.locator('#pplList tr').filter({hasText:'Бауыржан'}).locator('button').filter({hasText:'✎'}).click();await A.pg.waitForTimeout(200);
+  ok("S16b Şantiye seçim penceresi: liste + Tümü/Hiçbiri",await vis(A.pg,'#mForm')&&(await A.pg.locator('#pkList input').count())===2&&(await A.pg.locator('#pkList input:checked').count())===1);
+  await A.pg.locator('#pkList label').filter({hasText:'Almaty'}).locator('input').check();await A.pg.click('#frmOk');await A.pg.waitForTimeout(400);
   ok("S17 Kullanıcıya Almaty yetkisi verildi",JSON.stringify(Object.values(server.S.people).find(p=>p.email==='bauyrzhan@test.kz').sites.sort())==='["'+[almId,'wb-astana'].sort().join('","')+'"]');
   await U2.pg.waitForTimeout(100);await U2.pg.evaluate(()=>loadAll());await U2.pg.waitForTimeout(400);
   ok("S18 Kullanıcı seçicisinde artık 2 şantiye («Все объекты» yok)",(await U2.pg.locator('#siteSel option').count())===2&&!/Все объекты/.test(await U2.pg.textContent('#siteSel')));
