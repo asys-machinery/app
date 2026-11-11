@@ -7,6 +7,7 @@
 -- Kullanıcıların people.sites listesi hangi şantiyeleri görebileceğini belirler; admin hepsini görür.
 
 create extension if not exists pgcrypto;
+create schema if not exists asys;   -- iç fonksiyonlar (API'ye kapalı)
 
 -- ---------- tablolar ----------
 create table if not exists sites (
@@ -105,14 +106,12 @@ revoke all on all tables in schema public from anon, authenticated;
 revoke all on all sequences in schema public from anon, authenticated;
 
 -- ======================= FONKSİYONLAR (v2 — çoklu şantiye) =======================
--- Eski imzalar (v1) varsa kaldır: aynı adla farklı parametre listesi "function is not unique" hatasına yol açar.
-drop function if exists mach_save_day(text,text,jsonb);
-drop function if exists mach_apply_day(text,jsonb,text,text);
-drop function if exists mach_lock_days();
-drop function if exists mach_upsert_person(text,text,text,text,text,boolean,text);
+-- İç yardımcılar "asys" şemasındadır: PostgREST yalnızca public şemasını sunar, anon'un bu şemada USAGE yetkisi yoktur →
+-- API'den çağrılamazlar (revoke gerekmez). Hiçbir şey silinmez; v1'den kalan eski imzalar zararsızdır (yetkileri zaten alınmıştı).
+create schema if not exists asys;
 
 -- ---------- yardımcılar ----------
-create or replace function mach_require(p_token text, p_admin boolean default false, p_write boolean default false)
+create or replace function asys.require(p_token text, p_admin boolean default false, p_write boolean default false)
 returns people language plpgsql security definer as $$
 declare s sessions; p people;
 begin
@@ -126,23 +125,23 @@ begin
 end $$;
 
 -- kişinin görebildiği şantiyeler (admin: hepsi)
-create or replace function mach_sites_of(p people) returns text[] language sql security definer stable as $$
+create or replace function asys.sites_of(p people) returns text[] language sql security definer stable as $$
   select case when p.role = 'admin' then coalesce((select array_agg(id) from sites), '{}'::text[])
               else coalesce((select array_agg(x) from jsonb_array_elements_text(coalesce(p.sites,'[]'::jsonb)) x), '{}'::text[]) end;
 $$;
-create or replace function mach_site_ok(p people, p_site text) returns boolean language sql security definer stable as $$
-  select p.role = 'admin' or p_site = any(mach_sites_of(p));
+create or replace function asys.site_ok(p people, p_site text) returns boolean language sql security definer stable as $$
+  select p.role = 'admin' or p_site = any(asys.sites_of(p));
 $$;
 -- tek şantiyesi olan kişi için varsayılan şantiye (eski istemciler / tek şantiyeli kurulum)
-create or replace function mach_default_site(p people) returns text language plpgsql security definer stable as $$
+create or replace function asys.default_site(p people) returns text language plpgsql security definer stable as $$
 declare a text[];
 begin
-  a := mach_sites_of(p);
+  a := asys.sites_of(p);
   if array_length(a,1) = 1 then return a[1]; end if;
   return null;
 end $$;
 
-create or replace function mach_lock_days(p_site text) returns int language sql security definer stable as $$
+create or replace function asys.lock_days(p_site text) returns int language sql security definer stable as $$
   select coalesce((select (data->>'lockDays')::int from sites where id = p_site),
                   (select (value->>'lockDays')::int from settings where key = 'site'), 3);
 $$;
@@ -170,7 +169,7 @@ create or replace function mach_change_password(p_token text, p_old text, p_new 
 returns void language plpgsql security definer as $$
 declare p people; h text;
 begin
-  p := mach_require(p_token);
+  p := asys.require(p_token);
   if length(p_new) < 6 then raise exception 'too_short'; end if;
   select pin_hash into h from pins where person_id = p.id;
   if h is null or h <> crypt(p_old, h) then raise exception 'bad_old'; end if;
@@ -184,10 +183,10 @@ create or replace function mach_fetch(p_token text, p_since text default null)
 returns jsonb language plpgsql security definer stable as $$
 declare p people; since text; mc boolean; adm boolean; al text[];
 begin
-  p := mach_require(p_token);
+  p := asys.require(p_token);
   since := coalesce(p_since, to_char(now() - interval '400 days', 'YYYY-MM-DD'));
   select must_change into mc from pins where person_id = p.id;
-  adm := p.role = 'admin'; al := mach_sites_of(p);
+  adm := p.role = 'admin'; al := asys.sites_of(p);
   return jsonb_build_object(
     'me', jsonb_build_object('person', p.id, 'name', p.name, 'role', p.role, 'mustChange', coalesce(mc,false), 'sites', coalesce(p.sites,'[]'::jsonb)),
     'sites', coalesce((select jsonb_object_agg(id, jsonb_build_object('id',id,'name',name,'active',active,'data',data)) from sites), '{}'::jsonb),
@@ -210,7 +209,7 @@ end $$;
 -- ---------- günlük kayıt: sunucu tarafında birleştirme + değişiklik geçmişi ----------
 -- p_rows: {machineId: row} — yalnızca değişen satırlar. Mevcut kayıt üzerine satır satır yazılır,
 -- alan alan fark çıkarılıp geçmişe eklenir. Kilitli günlerde (today - lockDays) yalnızca admin yazar.
-create or replace function mach_apply_day(p_site text, p_date text, p_rows jsonb, p_by text, p_requested_by text default null)
+create or replace function asys.apply_day(p_site text, p_date text, p_rows jsonb, p_by text, p_requested_by text)
 returns jsonb language plpgsql security definer as $$
 declare cur days; rec jsonb; hist jsonb; ch jsonb := '[]'::jsonb; m text; newrow jsonb; oldrow jsonb; f text; first boolean; n int := 0;
 begin
@@ -241,19 +240,22 @@ begin
 end $$;
 
 -- p_site boş bırakılırsa kişinin tek şantiyesi kullanılır (tek şantiyeli kurulum / eski istemci)
-create or replace function mach_save_day(p_token text, p_date text, p_rows jsonb, p_site text default null)
+create or replace function mach_save_day(p_token text, p_date text, p_rows jsonb, p_site text)
 returns jsonb language plpgsql security definer as $$
 declare p people; st text;
 begin
-  p := mach_require(p_token, false, true);
+  p := asys.require(p_token, false, true);
   if p_date !~ '^\d{4}-\d{2}-\d{2}$' then raise exception 'bad_date'; end if;
-  st := coalesce(nullif(p_site,''), mach_default_site(p));
+  st := coalesce(nullif(p_site,''), asys.default_site(p));
   if st is null or st = '' then raise exception 'site_required'; end if;
   if not exists (select 1 from sites where id = st) then raise exception 'bad_site'; end if;
-  if not mach_site_ok(p, st) then raise exception 'no_site_access'; end if;
-  if p.role <> 'admin' and p_date::date < (current_date - mach_lock_days(st)) then raise exception 'locked'; end if;
-  return mach_apply_day(st, p_date, p_rows, p.id, null);
+  if not asys.site_ok(p, st) then raise exception 'no_site_access'; end if;
+  if p.role <> 'admin' and p_date::date < (current_date - asys.lock_days(st)) then raise exception 'locked'; end if;
+  return asys.apply_day(st, p_date, p_rows, p.id, null);
 end $$;
+-- v1 imzası (3 parametre): tek şantiyeli kurulum / eski istemci → varsayılan şantiye
+create or replace function mach_save_day(p_token text, p_date text, p_rows jsonb)
+returns jsonb language sql security definer as $$ select mach_save_day(p_token, p_date, p_rows, null); $$;
 
 -- ---------- tanımlar (admin) ----------
 -- p_data içindeki "site" alanı sütuna yazılır (veri içinde tutulmaz). Makinenin şantiyesi yalnızca
@@ -262,7 +264,7 @@ create or replace function mach_ref_upsert(p_token text, p_col text, p_id text, 
 returns void language plpgsql security definer as $$
 declare p people; st text; d jsonb;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   st := nullif(p_data->>'site',''); d := p_data - 'site';
   if st is not null and not exists (select 1 from sites where id = st) then raise exception 'bad_site'; end if;
   if p_col = 'machines' then
@@ -278,7 +280,7 @@ create or replace function mach_set_setting(p_token text, p_key text, p_value js
 returns void language plpgsql security definer as $$
 declare p people;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   insert into settings(key, value) values (p_key, p_value) on conflict (key) do update set value = excluded.value;
 end $$;
 
@@ -287,7 +289,7 @@ create or replace function mach_site_upsert(p_token text, p_id text, p_name text
 returns jsonb language plpgsql security definer as $$
 declare p people; sid text; r sites; n int;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   if length(trim(coalesce(p_name,''))) = 0 then raise exception 'name_required'; end if;
   sid := coalesce(nullif(p_id,''), 's' || encode(gen_random_bytes(4),'hex'));
   if not coalesce(p_active,true) then
@@ -301,7 +303,7 @@ begin
 end $$;
 
 -- makine taşıma (iç): günlüğe yazar, makinenin şantiyesini değiştirir
-create or replace function mach_do_move(p_machine text, p_to text, p_date text, p_by text, p_note text)
+create or replace function asys.do_move(p_machine text, p_to text, p_date text, p_by text, p_note text)
 returns void language plpgsql security definer as $$
 declare frm text;
 begin
@@ -318,8 +320,8 @@ create or replace function mach_move_machine(p_token text, p_machine text, p_to_
 returns void language plpgsql security definer as $$
 declare p people;
 begin
-  p := mach_require(p_token, true);
-  perform mach_do_move(p_machine, coalesce(p_to_site,''), coalesce(nullif(p_date,''), to_char(current_date,'YYYY-MM-DD')), p.id, p_note);
+  p := asys.require(p_token, true);
+  perform asys.do_move(p_machine, coalesce(p_to_site,''), coalesce(nullif(p_date,''), to_char(current_date,'YYYY-MM-DD')), p.id, p_note);
 end $$;
 
 -- ---------- arızalar (kullanıcı+) ----------
@@ -327,9 +329,9 @@ create or replace function mach_incident_set(p_token text, p_id text, p_data jso
 returns void language plpgsql security definer as $$
 declare p people; st text;
 begin
-  p := mach_require(p_token, false, true);
-  st := coalesce(nullif(p_data->>'site',''), (select nullif(site,'') from machines where id = p_data->>'machineId'), (select nullif(site,'') from incidents where id = p_id), mach_default_site(p), '');
-  if not mach_site_ok(p, st) then raise exception 'no_site_access'; end if;
+  p := asys.require(p_token, false, true);
+  st := coalesce(nullif(p_data->>'site',''), (select nullif(site,'') from machines where id = p_data->>'machineId'), (select nullif(site,'') from incidents where id = p_id), asys.default_site(p), '');
+  if not asys.site_ok(p, st) then raise exception 'no_site_access'; end if;
   insert into incidents(id, date, machine_id, site, data) values (p_id, coalesce(p_data->>'date',''), coalesce(p_data->>'machineId',''), st, p_data - 'site')
     on conflict (id) do update set date = excluded.date, machine_id = excluded.machine_id, site = excluded.site, data = excluded.data, updated_at = now();
 end $$;
@@ -338,7 +340,7 @@ create or replace function mach_incident_delete(p_token text, p_id text)
 returns void language plpgsql security definer as $$
 declare p people;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   delete from incidents where id = p_id;
 end $$;
 
@@ -347,11 +349,11 @@ create or replace function mach_request_create(p_token text, p_id text, p_type t
 returns void language plpgsql security definer as $$
 declare p people; st text;
 begin
-  p := mach_require(p_token, false, true);
+  p := asys.require(p_token, false, true);
   if p_type not in ('machine_add','toggle','team_add','operator_add','day_edit','machine_move') then raise exception 'bad_type'; end if;
-  st := coalesce(nullif(p_payload->>'site',''), mach_default_site(p), '');
-  if st <> '' and not mach_site_ok(p, st) then raise exception 'no_site_access'; end if;
-  if p_type = 'machine_move' and coalesce(p_payload->>'toSite','') <> '' and not mach_site_ok(p, p_payload->>'toSite') then raise exception 'no_site_access'; end if;
+  st := coalesce(nullif(p_payload->>'site',''), asys.default_site(p), '');
+  if st <> '' and not asys.site_ok(p, st) then raise exception 'no_site_access'; end if;
+  if p_type = 'machine_move' and coalesce(p_payload->>'toSite','') <> '' and not asys.site_ok(p, p_payload->>'toSite') then raise exception 'no_site_access'; end if;
   insert into requests(id, type, status, site, data) values (p_id, p_type, 'pending', st,
     jsonb_build_object('payload', p_payload - 'site', 'summary', coalesce(p_summary,''), 'by', p.id, 'at', now()));
 end $$;
@@ -360,7 +362,7 @@ create or replace function mach_decide(p_token text, p_id text, p_approve boolea
 returns void language plpgsql security definer as $$
 declare p people; r requests; pl jsonb; ex jsonb; col text; st text;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   select * into r from requests where id = p_id;
   if r.id is null then raise exception 'no_request'; end if;
   if r.status <> 'pending' then raise exception 'already_decided'; end if;
@@ -388,9 +390,9 @@ begin
       elsif col = 'operators' then update operators set data = data || jsonb_build_object('active', (pl->>'active')::boolean), updated_at = now() where id = pl->>'id';
       end if;
     elsif r.type = 'day_edit' then
-      perform mach_apply_day(coalesce(nullif(pl->>'site',''), r.site), pl->>'date', pl->'rows', p.id, r.data->>'by');
+      perform asys.apply_day(coalesce(nullif(pl->>'site',''), r.site), pl->>'date', pl->'rows', p.id, r.data->>'by');
     elsif r.type = 'machine_move' then
-      perform mach_do_move(pl->>'machineId', coalesce(pl->>'toSite',''), coalesce(nullif(pl->>'date',''), to_char(current_date,'YYYY-MM-DD')), p.id, coalesce(pl->>'note','') || ' (' || coalesce(r.data->>'by','') || ')');
+      perform asys.do_move(pl->>'machineId', coalesce(pl->>'toSite',''), coalesce(nullif(pl->>'date',''), to_char(current_date,'YYYY-MM-DD')), p.id, coalesce(pl->>'note','') || ' (' || coalesce(r.data->>'by','') || ')');
     end if;
   end if;
   update requests set status = case when p_approve then 'approved' else 'rejected' end,
@@ -399,11 +401,11 @@ end $$;
 
 -- ---------- kişiler (admin) ----------
 -- p_sites: ["wb-astana",...] → kişinin görebildiği şantiyeler; null = değiştirme
-create or replace function mach_upsert_person(p_token text, p_id text, p_name text, p_email text, p_role text, p_active boolean, p_password text, p_sites jsonb default null)
+create or replace function mach_upsert_person(p_token text, p_id text, p_name text, p_email text, p_role text, p_active boolean, p_password text, p_sites jsonb)
 returns jsonb language plpgsql security definer as $$
 declare p people; pid text; r people; admins int; ss jsonb;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   if p_role not in ('admin','user','viewer') then raise exception 'bad_role'; end if;
   if p_email is null or position('@' in p_email) = 0 then raise exception 'bad_email'; end if;
   if length(trim(coalesce(p_name,''))) = 0 then raise exception 'name_required'; end if;
@@ -422,16 +424,19 @@ begin
   if p_password is not null and length(p_password) >= 6 then
     insert into pins(person_id, pin_hash, must_change) values (pid, crypt(p_password, gen_salt('bf')), true)
       on conflict (person_id) do update set pin_hash = excluded.pin_hash, must_change = true;
-    if pid <> p.id then delete from sessions where person_id = pid; end if;
+    if pid <> p.id then perform mach_revoke_person(p_token, pid); end if;   -- şifre sıfırlandı: kişinin açık oturumları kapanır
   end if;
   return jsonb_build_object('id', r.id, 'name', r.name, 'email', r.email, 'role', r.role, 'active', r.active, 'sites', r.sites, 'lastLogin', r.last_login);
 end $$;
+-- v1 imzası (7 parametre): şantiye listesi değişmez
+create or replace function mach_upsert_person(p_token text, p_id text, p_name text, p_email text, p_role text, p_active boolean, p_password text)
+returns jsonb language sql security definer as $$ select mach_upsert_person(p_token, p_id, p_name, p_email, p_role, p_active, p_password, null); $$;
 
 create or replace function mach_sessions(p_token text)
 returns jsonb language plpgsql security definer stable as $$
 declare p people;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   return coalesce((select jsonb_agg(jsonb_build_object('person', person_id, 'at', created_at, 'exp', expires_at) order by created_at desc) from sessions where expires_at > now()), '[]'::jsonb);
 end $$;
 
@@ -439,7 +444,7 @@ create or replace function mach_revoke_person(p_token text, p_person text)
 returns void language plpgsql security definer as $$
 declare p people;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   delete from sessions where person_id = p_person and token <> p_token;
 end $$;
 
@@ -447,7 +452,7 @@ create or replace function mach_delete_person(p_token text, p_person text)
 returns void language plpgsql security definer as $$
 declare p people; n int;
 begin
-  p := mach_require(p_token, true);
+  p := asys.require(p_token, true);
   if p_person = p.id then raise exception 'self'; end if;
   select count(*) into n from days where saved_by = p_person
     or exists (select 1 from jsonb_array_elements(history) h where h->>'by' = p_person or h->>'requestedBy' = p_person);
@@ -464,14 +469,12 @@ end $$;
 -- ---------- yetkiler ----------
 grant execute on function
   mach_login(text,text), mach_logout(text), mach_change_password(text,text,text), mach_fetch(text,text),
-  mach_save_day(text,text,jsonb,text), mach_ref_upsert(text,text,text,jsonb), mach_set_setting(text,text,jsonb),
+  mach_save_day(text,text,jsonb,text), mach_save_day(text,text,jsonb), mach_ref_upsert(text,text,text,jsonb), mach_set_setting(text,text,jsonb),
   mach_site_upsert(text,text,text,boolean,jsonb), mach_move_machine(text,text,text,text,text),
   mach_incident_set(text,text,jsonb), mach_incident_delete(text,text),
   mach_request_create(text,text,text,jsonb,text), mach_decide(text,text,boolean),
-  mach_upsert_person(text,text,text,text,text,boolean,text,jsonb), mach_sessions(text), mach_revoke_person(text,text), mach_delete_person(text,text)
+  mach_upsert_person(text,text,text,text,text,boolean,text,jsonb), mach_upsert_person(text,text,text,text,text,boolean,text), mach_sessions(text), mach_revoke_person(text,text), mach_delete_person(text,text)
   to anon, authenticated;
-revoke execute on function mach_require(text,boolean,boolean), mach_lock_days(text), mach_sites_of(people), mach_site_ok(people,text), mach_default_site(people),
-  mach_apply_day(text,text,jsonb,text,text), mach_do_move(text,text,text,text,text) from anon, authenticated, public;
 
 -- PostgREST API önbelleğini yenile (yeni/değişen fonksiyonlar hemen görünsün)
 notify pgrst, 'reload schema';

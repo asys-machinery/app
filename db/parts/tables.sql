@@ -7,6 +7,7 @@
 -- Kullanıcıların people.sites listesi hangi şantiyeleri görebileceğini belirler; admin hepsini görür.
 
 create extension if not exists pgcrypto;
+create schema if not exists asys;   -- iç fonksiyonlar (API'ye kapalı)
 
 -- ---------- tablolar ----------
 create table if not exists sites (

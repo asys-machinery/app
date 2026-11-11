@@ -186,7 +186,7 @@ select t_expect_err(format($$select mach_fetch(%L)$$,(select v from tk where k='
 set role anon;
 select t_expect_err($$select * from machines$$, 'permission denied for table machines');
 select t_expect_err($$select * from pins$$, 'permission denied for table pins');
-select t_expect_err($$select mach_apply_day('wb-astana','2026-01-01','{}','x')$$, 'permission denied for function mach_apply_day');
-select t_expect_err($$select mach_do_move('x','','2026-01-01','x','')$$, 'permission denied for function mach_do_move');
+select t_expect_err($$select asys.apply_day('wb-astana','2026-01-01','{}','x',null)$$, 'permission denied for schema asys');
+select t_expect_err($$select asys.do_move('x','','2026-01-01','x','')$$, 'permission denied for schema asys');
 select t_expect_err($$select * from sites$$, 'permission denied for table sites');
 reset role;
